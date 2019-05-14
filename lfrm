@@ -1,0 +1,4 @@
+git fetch origin && \
+git rebase origin/master && \
+cp Makefile_local Makefile && \
+make
