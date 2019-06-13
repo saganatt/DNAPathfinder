@@ -228,6 +228,9 @@ else
       BUILD_TYPE := release
 endif
 
+EXTRA_CCFLAGS := -rdynamic
+EXTRA_NVCCFLAGS := -lineinfo
+
 ALL_CCFLAGS :=
 ALL_CCFLAGS += $(NVCCFLAGS)
 ALL_CCFLAGS += $(EXTRA_NVCCFLAGS)

@@ -25,8 +25,10 @@
 #include "thrust/for_each.h"
 #include "thrust/device_vector.h"
 #include "thrust/sort.h"
+#include "thrust/scan.h"
 
 #include "particles_kernel_impl.cuh"
+#include "BFS.cuh"
 
 extern "C"
 {
@@ -152,10 +154,9 @@ extern "C"
 
     void checkContour(int32_t *adjTriangle,
                       uint32_t adjTriangleSize,
-                      float * pos,
+                      float * oldPos,
                       uint32_t *contour,
                       uint3 contourSize,
-                      float3 voxelSize,
                       uint numParticles)
     {
     #if USE_TEX
@@ -168,14 +169,13 @@ extern "C"
 
         checkContourD<<< numBlocks, numThreads >>>(adjTriangle,
                     adjTriangleSize,
-                    (float3 *) pos,
+                    (float3 *) oldPos,
                     contour,
                     contourSize,
-                    voxelSize,
                     numParticles);
 
         // check if kernel invocation generated an error
-        getLastCudaError("Kernel execution failed");
+        getLastCudaError("Kernel execution failed: checkContourD");
 
     #if USE_TEX
         checkCudaErrors(cudaUnbindTexture(oldPosTex));
@@ -183,7 +183,6 @@ extern "C"
     }
 
     void connectPairs(int32_t *adjTriangle,
-                      uint32_t adjTriangleSize,
                       float *sortedPos,
                       uint  *gridParticleIndex,
                       uint  *cellStart,
@@ -203,7 +202,6 @@ extern "C"
 
         // execute the kernel
         connectPairsD<<< numBlocks, numThreads >>>(adjTriangle,
-                adjTriangleSize,
                 (float3 *) sortedPos,
                 gridParticleIndex,
                 cellStart,
@@ -212,13 +210,239 @@ extern "C"
                 numCells);
 
         // check if kernel invocation generated an error
-        getLastCudaError("Kernel execution failed");
+        getLastCudaError("Kernel execution failed: connectPairsD");
 
     #if USE_TEX
         checkCudaErrors(cudaUnbindTexture(oldPosTex));
         checkCudaErrors(cudaUnbindTexture(cellStartTex));
         checkCudaErrors(cudaUnbindTexture(cellEndTex));
     #endif
+    }
+
+    void calcDegrees(int32_t *adjTriangle,
+                     int32_t *edgesCount,
+                     int32_t *degrees,
+                     uint   numParticles)
+    {
+        // thread per particle
+        uint numThreads, numBlocks;
+        computeGridSize(numParticles, 64, numBlocks, numThreads);
+
+        calcDegreesD<<<numBlocks, numThreads >>>(adjTriangle,
+            edgesCount,
+            degrees,
+            numParticles);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: calcDegreesD");
+    }
+
+    void markIsolatedVertices(int32_t *degrees,
+                              bool *isolatedVertices,
+                              uint   numParticles)
+    {
+        // thread per particle
+        uint numThreads, numBlocks;
+        computeGridSize(numParticles, 64, numBlocks, numThreads);
+
+        markIsolatedVerticesD<<<numBlocks, numThreads >>>(degrees,
+            isolatedVertices,
+            numParticles);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: markIsolatedVerticesD");
+    }
+
+    void createAdjList(int32_t *adjacencyList,
+                       int32_t *adjTriangle,
+                       int32_t *edgesOffset,
+                       int32_t *edgesSize,
+                       uint numParticles,
+                       int32_t *d_incrDegrees)
+    {
+        // thread per particle
+        uint numThreads, numBlocks;
+        computeGridSize(numParticles, 64, numBlocks, numThreads);
+
+        createAdjListD<<<numBlocks, numThreads >>>(adjacencyList,
+            adjTriangle,
+            edgesOffset,
+            edgesSize,
+            numParticles,
+            d_incrDegrees);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: createAdjListD");
+    }
+
+    void readAdjList(int32_t *adjacencyList,
+                     int32_t *edgesOffset,
+                     int32_t *edgesSize,
+                     uint numParticles)
+    {
+        // thread per particle
+        uint numThreads, numBlocks;
+        computeGridSize(numParticles, 64, numBlocks, numThreads);
+
+        readAdjListD<<<numBlocks, numThreads >>>(adjacencyList,
+            edgesOffset,
+            edgesSize,
+            numParticles);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: readAdjListD");
+    }
+
+    void nextLayer(int32_t level,
+                   int32_t *adjacencyList,
+                   int32_t *edgesOffset,
+                   int32_t *edgesSize,
+                   float *distance,
+                   int32_t *verticesDistance,
+                   int32_t *parent,
+                   int queueSize,
+                   int32_t *currentQueue,
+                   float *oldPos,
+                   bool *frontier,
+                   Cluster *cluster,
+                   int32_t *clusterInds,
+                   int32_t currentClusterInd)
+    {
+#if USE_TEX
+        checkCudaErrors(cudaBindTexture(0, oldPosTex, oldPos, numParticles*sizeof(float3)));
+#endif
+
+        // thread per queue member
+        uint numThreads, numBlocks;
+        computeGridSize(queueSize, 64, numBlocks, numThreads);
+
+        // execute the kernel
+        nextLayerD<<< numBlocks, numThreads >>>(level,
+            adjacencyList,
+            edgesOffset,
+            edgesSize,
+            distance,
+            verticesDistance,
+            parent,
+            queueSize,
+            currentQueue,
+            (float3 *) oldPos,
+            frontier,
+            cluster,
+            clusterInds,
+            currentClusterInd);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: nextLayerD");
+
+#if USE_TEX
+        checkCudaErrors(cudaUnbindTexture(oldPosTex));
+#endif
+    }
+
+    void completeClusterStats(int32_t *edgesSize,
+                              int numParticles,
+                              bool *frontier,
+                              Cluster *cluster)
+    {
+        // thread per particle
+        uint numThreads, numBlocks;
+        computeGridSize(numParticles, 64, numBlocks, numThreads);
+
+        // execute the kernel
+        completeClusterStatsD<<< numBlocks, numThreads >>>(edgesSize,
+            numParticles,
+            frontier,
+            cluster);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: completeClusterStatsD");
+    }
+
+    void countDegrees(int32_t *adjacencyList,
+                      int32_t *edgesOffset,
+                      int32_t *edgesSize,
+                      int32_t *parent,
+                      int queueSize,
+                      int32_t *currentQueue,
+                      int32_t *degrees,
+                      bool *frontier) {
+        // thread per queue member
+        uint numThreads, numBlocks;
+        computeGridSize(queueSize, 64, numBlocks, numThreads);
+
+        // execute the kernel
+        countDegreesD<<< numBlocks, numThreads >>>(adjacencyList,
+            edgesOffset,
+            edgesSize,
+            parent,
+            queueSize,
+            currentQueue,
+            degrees,
+            frontier);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: countDegreesD");
+    }
+
+    void scanDegreesTh(uint numParticles, int32_t *degrees, int32_t *scannedDegrees) {
+        thrust::exclusive_scan(thrust::device_ptr<int32_t>(degrees),
+                               thrust::device_ptr<int32_t>(degrees + numParticles),
+                               thrust::device_ptr<int32_t>(scannedDegrees));
+    }
+
+    void scanDegrees(int queueSize, int32_t *degrees, int32_t *incrDegrees, int32_t *scannedDegrees) {
+        // thread per queue member
+        uint numThreads, numBlocks;
+        computeGridSize(queueSize, 64, numBlocks, numThreads);
+
+        scanDegreesD<<< numBlocks, numThreads >>>(queueSize,
+            degrees,
+            incrDegrees,
+            scannedDegrees);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: scanDegreesD");
+        cudaDeviceSynchronize();
+
+        //count prefix sums on CPU for ends of blocks exclusive
+        //already written previous block sum
+        incrDegrees[0] = 0;
+        for (int i = 64; i < queueSize + 64; i += 64) {
+            incrDegrees[i / 64] += incrDegrees[i / 64 - 1];
+        }
+    }
+
+    void assignVerticesNextQueue(int32_t *adjacencyList,
+                                 int32_t *edgesOffset,
+                                 int32_t *edgesSize,
+                                 int32_t *parent,
+                                 int queueSize,
+                                 int32_t *currentQueue,
+                                 int32_t *nextQueue,
+                                 int32_t *degrees,
+                                 int32_t *incrDegrees,
+                                 int32_t nextQueueSize,
+                                 bool *frontier) {
+        // thread per queue member
+        uint numThreads, numBlocks;
+        computeGridSize(queueSize, 64, numBlocks, numThreads);
+
+        // execute the kernel
+        assignVerticesNextQueueD<<< numBlocks, numThreads >>>(adjacencyList,
+            edgesOffset,
+            edgesSize,
+            parent,
+            queueSize,
+            currentQueue,
+            nextQueue,
+            degrees,
+            incrDegrees,
+            nextQueueSize,
+            frontier);
+
+        // check if kernel invocation generated an error
+        getLastCudaError("Kernel execution failed: assignVerticesNextQueueD");
     }
 
 }   // extern "C"

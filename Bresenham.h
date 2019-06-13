@@ -119,18 +119,16 @@ bool checkPathInContour(float3 p1, float3 p2, uint32_t *contour, uint3 contourSi
     uint3 pv2 = make_uint3((uint)floorf(p2.x / voxelSize.x),
                            (uint)floorf(p2.y / voxelSize.y), (uint)floorf(p2.z / voxelSize.z));
 
-    if(contour[pv1.x + pv1.y * contourSize.x +
-               pv1.z * contourSize.x * contourSize.y] == 0) {
-        printf("Particle 1 at (%f, %f, %f), voxel: (%u, %u, %u) (%f, %f, %f) outside contour!\n", p1.x, p1.y, p1.z, pv1.x, pv1.y, pv1.z, floorf(p1.x / voxelSize.x), floorf(p1.y / voxelSize.y), floorf(p1.z / voxelSize.z));
-    }
-    if(contour[pv2.x + pv2.y * contourSize.x +
-               pv2.z * contourSize.x * contourSize.y] == 0) {
-        printf("Particle 2 at (%f, %f, %f), voxel: (%u, %u, %u) (%f, %f, %f) outside contour!\n", p2.x, p2.y, p2.z, pv2.x, pv2.y, pv2.z, floorf(p2.x / voxelSize.x), floorf(p2.y / voxelSize.y), floorf(p2.z / voxelSize.z));
-    }
+    //if(contour[pv1.x + pv1.y * contourSize.x +
+    //           pv1.z * contourSize.x * contourSize.y] == 0) {
+    //    printf("Particle 1 at (%f, %f, %f), voxel: (%u, %u, %u) (%f, %f, %f) outside contour!\n", p1.x, p1.y, p1.z, pv1.x, pv1.y, pv1.z, floorf(p1.x / voxelSize.x), floorf(p1.y / voxelSize.y), floorf(p1.z / voxelSize.z));
+    //}
+    //if(contour[pv2.x + pv2.y * contourSize.x +
+    //           pv2.z * contourSize.x * contourSize.y] == 0) {
+    //    printf("Particle 2 at (%f, %f, %f), voxel: (%u, %u, %u) (%f, %f, %f) outside contour!\n", p2.x, p2.y, p2.z, pv2.x, pv2.y, pv2.z, floorf(p2.x / voxelSize.x), floorf(p2.y / voxelSize.y), floorf(p2.z / voxelSize.z));
+    //}
 
     bool res = Bresenham3D(pv1, pv2, contour, contourSize);
-    //printf("Checking contour, p1: (%f, %f, %f), pv1: (%u, %u, %u), p2: (%f, %f, %f), pv2: (%u, %u, %u), result: %d\n",
-    //       p1.x, p1.y, p1.z, pv1.x, pv1.y, pv1.z, p2.x, p2.y, p2.z, pv2.x, pv2.y, pv2.z, res);
     return res;
 }
 

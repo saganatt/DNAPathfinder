@@ -25,6 +25,7 @@ namespace cg = cooperative_groups;
 #include "helper_math.h"
 #include "math_constants.h"
 #include "particles_kernel.cuh"
+#include "cluster.h"
 
 #include "Bresenham.h"
 
@@ -36,9 +37,6 @@ texture<uint, 1, cudaReadModeElementType> gridParticleHashTex;
 texture<uint, 1, cudaReadModeElementType> cellStartTex;
 texture<uint, 1, cudaReadModeElementType> cellEndTex;
 #endif
-
-//#ifndef DEBUG
-//#define DEBUG 1
 
 // simulation parameters in constant memory
 __constant__ SimParams params;
@@ -181,6 +179,20 @@ void setAdjTriangleEntry(int32_t *adjTriangle,
 
 // Assumes that row and column start from 0
 __device__
+void addAdjTriangleEntry(int32_t *adjTriangle,
+                         uint numParticles,
+                         uint32_t row,
+                         uint32_t column) {
+    if(row > column) {
+        uint32_t tmp = row;
+        row = column;
+        column = tmp;
+    }
+    atomicAdd(&adjTriangle[(row * (2 * numParticles - 1 - row)) / 2 + column - row - 1], 1);
+};
+
+// Assumes that row and column start from 0
+__device__
 void getPairFromAdjTriangleIndex(uint numParticles,
                                  uint32_t index,
                                  uint32_t *row,
@@ -201,7 +213,6 @@ void checkContourD(int32_t *adjTriangle,      // output: adjacency triangle
                    float3 *oldPos,           // input: positions
                    uint32_t *contour,        // input: contour
                    uint3 contourSize,
-                   float3 voxelSize,
                    uint   numParticles) {
     uint index = __mul24(blockIdx.x,blockDim.x) + threadIdx.x;
 
@@ -214,7 +225,7 @@ void checkContourD(int32_t *adjTriangle,      // output: adjacency triangle
     float3 pos1 = FETCH(oldPos, ind1);
     float3 pos2 = FETCH(oldPos, ind2);
 
-    if(!checkPathInContour(pos1, pos2, contour, contourSize, voxelSize)) {
+    if(!checkPathInContour(pos1, pos2, contour, contourSize, params.voxelSize)) {
         setAdjTriangleEntry(adjTriangle, numParticles, ind1, ind2, -1);
     }
 }
@@ -229,7 +240,7 @@ void compareClosest(int3    gridPos,
                     float *first_dist_sq,
                     float *second_dist_sq,
                     float searchRadius,
-                    float3 *oldPos,
+                    float3 *sortedPos,
                     int32_t *adjTriangle,
                     uint numParticles,
                     uint   *cellStart,
@@ -249,21 +260,16 @@ void compareClosest(int3    gridPos,
         {
             if (j != index)                 // check not comparing with self
             {
-                float3 pos2 = FETCH(oldPos, j);
+                float3 pos2 = FETCH(sortedPos, j);
 
                 float dist_sq = dot(pos - pos2, pos - pos2);
-
-//#if DEBUG
-                //printf("In compareClosest: particle no %u pos: %f %f %f first_ind: %u, second_ind: %u\n comparing particle no %u pos %f %f %f, dist: %f first_dist: %f second_dist: %f\n",
-//                       ind, pos.x, pos.y, pos.z, *first_ind, *second_ind,
-//                       ind2, pos2.x, pos2.y, pos2.z, dist_sq, *first_dist_sq, second_dist_sq);
-//#endif
 
                 if(getAdjTriangleEntry(adjTriangle, numParticles, index, j) != -1) {
                     if (dist_sq < *first_dist_sq) {
                         *first_dist_sq = dist_sq;
                         *first_ind = j;
-                    } else if (j != *first_ind && dist_sq < *second_dist_sq) {
+                    }
+                    else if (j != *first_ind && dist_sq < *second_dist_sq) {
                         *second_dist_sq = dist_sq;
                         *second_ind = j;
                     }
@@ -275,9 +281,8 @@ void compareClosest(int3    gridPos,
 
 __global__
 void connectPairsD(int32_t *adjTriangle,      // output: adjacency triangle
-                  uint32_t adjTriangleSize,
-                  float3 *oldPos,           // input: sorted positions
-                  uint  *gridParticleIndex, // input: sorted particle indices
+                  float3 *sortedPos,          // input: sorted positions
+                  uint  *gridParticleIndex,   // input: sorted particle indices
                   uint  *cellStart,
                   uint  *cellEnd,
                   uint   numParticles,
@@ -285,14 +290,11 @@ void connectPairsD(int32_t *adjTriangle,      // output: adjacency triangle
 {
     uint index = __mul24(blockIdx.x, blockDim.x) + threadIdx.x;
 
-//#if DEBUG
-    //   printf("connectPairs kernel calculated index: %u, numParticles: %u\n", index, numParticles);
-//#endif
-
     if (index >= numParticles) return;
 
     // read particle data from sorted arrays
-    float3 pos = FETCH(oldPos, index);
+    uint sortedIndex = gridParticleIndex[index]; // original particle index
+    float3 pos = FETCH(sortedPos, index);
 
     // get address in grid
     int3 gridPos = calcGridPos(pos);
@@ -306,39 +308,149 @@ void connectPairsD(int32_t *adjTriangle,      // output: adjacency triangle
     float first_dist_sq = params.searchRadius * params.searchRadius;
     float second_dist_sq = params.searchRadius * params.searchRadius;
 
-//#if DEBUG
-    //printf("Checking pairs for particle of ind %u at pos %f %f %f, searchRadius: %f, cells radius: %d\n",
-    //       index + 1, pos.x, pos.y, pos.z, params.searchRadius, searchRadiusInCellsNumber);
-//#endif
-
     for (int z = -searchRadiusInCellsNumber; z <= searchRadiusInCellsNumber; z++) {
         for (int y = -searchRadiusInCellsNumber; y <= searchRadiusInCellsNumber; y++) {
             for (int x = -searchRadiusInCellsNumber; x <= searchRadiusInCellsNumber; x++) {
                 int3 neighbourPos = gridPos + make_int3(x, y, z);
                 compareClosest(neighbourPos, index, pos, &first_ind, &second_ind,
-                               &first_dist_sq, &second_dist_sq, params.searchRadius, oldPos,
+                               &first_dist_sq, &second_dist_sq, params.searchRadius, sortedPos,
                                adjTriangle, numParticles, cellStart, cellEnd);
-//#if DEBUG
-//                printf("In the loop: particle no %u first_dist: %f, second_dist: %f, first_ind: %u, second_ind: %u\n",
-//                        ind, first_dist_sq, second_dist_sq, first_ind, second_ind);
-//#endif
             }
         }
     }
 
-//#if DEBUG
-       //printf("Final results: first_ind %u second_ind %u\n", first_ind + 1, second_ind  + 1);
-//#endif
-
     // write new pairs
     if (first_ind < numParticles) {
-        setAdjTriangleEntry(adjTriangle, numParticles, index, first_ind, 1);
+        uint sorted_first_ind = gridParticleIndex[first_ind]; // original particle index
+        setAdjTriangleEntry(adjTriangle, numParticles, sortedIndex, sorted_first_ind, 1);
     }
     if (second_ind < numParticles) {
-        setAdjTriangleEntry(adjTriangle, numParticles, index, second_ind, 1);
+        uint sorted_second_ind = gridParticleIndex[second_ind]; // original particle index
+        setAdjTriangleEntry(adjTriangle, numParticles, sortedIndex, sorted_second_ind, 1);
     }
 }
 
-//#endif
+__global__
+void calcDegreesD(int32_t *adjTriangle,       // output: adjacency triangle
+                 int32_t *edgesCount,        // output: number of edges
+                 int32_t *degrees,           // output: vertices degrees
+                 uint   numParticles)
+{
+    uint index = __mul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    if (index >= numParticles) return;
+
+    degrees[index] = 0;
+    for(int i = 0; i < index; i++) {
+        if(getAdjTriangleEntry(adjTriangle, numParticles, i, index) > 0) {
+            atomicAdd(edgesCount, 1);
+            degrees[index] += 1;
+        }
+    }
+    for(int i = index + 1; i < numParticles; i++) {
+        if(getAdjTriangleEntry(adjTriangle, numParticles, index, i) > 0) {
+            atomicAdd(edgesCount, 1);
+            degrees[index] += 1;
+        }
+    }
+}
+
+__global__
+void markIsolatedVerticesD(int32_t *degrees,           // output: vertices degrees
+                          bool *isolatedVertices,     // output: isolated vertices
+                          uint   numParticles)
+{
+    uint index = __mul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    if (index >= numParticles) return;
+
+    if(degrees[index] == 0) {
+        isolatedVertices[index] = true;
+    }
+}
+
+__global__
+void createAdjListD(int32_t *adjacencyList,      // output: adjacency list
+                    int32_t *adjTriangle,        // input: adjacency triangle
+                    int32_t *edgesOffset,        // input: scanned degrees
+                    int32_t *edgesSize,          // input: vertices degrees
+                    uint numParticles,        // input: number of vertices
+                    int32_t *d_incrDegrees)
+{
+    uint index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numParticles) return;
+
+//    __shared__ int sharedIncrement;
+//    if (!threadIdx.x) {
+//        sharedIncrement = d_incrDegrees[index >> 10];
+//    }
+//    __syncthreads();
+//
+//    int sum = 0;
+//    if (threadIdx.x) {
+//        sum = edgesOffset[index - 1];
+//    }
+
+    int currentPos = edgesOffset[index]; //sharedIncrement + sum;
+    for(int i = 0; i < index; i++)
+    {
+        if(getAdjTriangleEntry(adjTriangle, numParticles, index, i) > 0)
+        {
+            if(currentPos >= edgesOffset[index] + edgesSize[index])
+            {
+                printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos, edgesOffset[index], edgesSize[index]);
+                //return;
+            }
+            adjacencyList[currentPos] = i;
+            currentPos++;
+        }
+    }
+    for(int i = index + 1; i < numParticles; i++)
+    {
+        if(getAdjTriangleEntry(adjTriangle, numParticles, index, i) > 0)
+        {
+            if(currentPos >= edgesOffset[index] + edgesSize[index])
+            {
+                printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos, edgesOffset[index], edgesSize[index]);
+                //return;
+            }
+            adjacencyList[currentPos] = i;
+            currentPos++;
+        }
+    }
+}
+
+__global__
+void readAdjListD(int32_t *adjacencyList,      // output: adjacency list
+                  int32_t *edgesOffset,        // input: scanned degrees
+                  int32_t *edgesSize,          // input: vertices degrees
+                  uint numParticles)          // input: number of vertices)
+{
+    uint index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numParticles) return;
+
+    for(int i = edgesOffset[index]; i < edgesOffset[index] + edgesSize[index]; i++) {
+        printf("[%d] Read adj list. Vertex: %d at %d\n", index, adjacencyList[i], i);
+        //printf("[%d] %d\n", index, adjacencyList[i]);
+    }
+}
+
+__global__
+void completeClusterStatsD(int32_t *edgesSize,
+                           int numParticles,
+                           bool *frontier,
+                           Cluster *cluster)
+{
+    uint index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numParticles) return;
+
+    if(frontier[index]) {
+        atomicAdd(&(cluster->clusterSize), 1);
+        if(edgesSize[index] == 1) {
+            atomicAdd(&(cluster->leavesCount), 1);
+        }
+        else if(edgesSize[index] > 2) {
+            atomicAdd(&(cluster->branchingsCount), 1);
+        }
+    }
+}
 
 #endif
