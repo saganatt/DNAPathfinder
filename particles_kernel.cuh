@@ -24,9 +24,6 @@ struct SimParams
     uint numCells;
     float3 worldOrigin;
     float3 cellSize;
-
-    uint numBodies;
-    uint maxParticlesPerCell;
 };
 
 #endif

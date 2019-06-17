@@ -285,8 +285,7 @@ void connectPairsD(int32_t *adjTriangle,      // output: adjacency triangle
                   uint  *gridParticleIndex,   // input: sorted particle indices
                   uint  *cellStart,
                   uint  *cellEnd,
-                  uint   numParticles,
-                  uint   numCells)
+                  uint   numParticles)
 {
     uint index = __mul24(blockIdx.x, blockDim.x) + threadIdx.x;
 
@@ -435,6 +434,7 @@ void readAdjListD(int32_t *adjacencyList,      // output: adjacency list
 
 __global__
 void completeClusterStatsD(int32_t *edgesSize,
+                           float3 *oldPos,
                            int numParticles,
                            bool *frontier,
                            Cluster *cluster)
@@ -450,6 +450,9 @@ void completeClusterStatsD(int32_t *edgesSize,
         else if(edgesSize[index] > 2) {
             atomicAdd(&(cluster->branchingsCount), 1);
         }
+        atomicAdd(&(cluster->massCentre.x), oldPos[index].x);
+        atomicAdd(&(cluster->massCentre.x), oldPos[index].y);
+        atomicAdd(&(cluster->massCentre.x), oldPos[index].z);
     }
 }
 

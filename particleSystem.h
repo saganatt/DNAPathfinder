@@ -85,6 +85,7 @@ class ParticleSystem
     private: // data
         bool m_bInitialized;
         uint m_numParticles;
+        uint m_numClusters;
 
         // CPU data
         float *m_hPos;              // particle positions
@@ -108,14 +109,25 @@ class ParticleSystem
 
         std::vector<Cluster> m_hClusters; // detected clusters
         int32_t *m_hClusterInds; // which cluster each vertex belongs to, -1 if none
+        // These need to be passed separately to CUDA kernels:
+        std::vector<std::vector<float3>> m_hClusterVertices; // vertices in each cluster
+        //std::vector<std::vector<uint>> m_hClusterVerticesInd; // vertices indices in each cluster
 
-        uint  *m_hParticleHash;
         uint  *m_hCellStart;
         uint  *m_hCellEnd;
 
         // GPU data
         float *m_dPos;
         float *m_dSortedPos;
+
+        // TODO: Structure as in adj list + prefix sums
+        float *m_dClusterVertices;
+        float *m_dSortedClusterVertices;
+        //uint *m_dClusterVerticesInd;
+        //uint *m_dSortedClusterVerticesInd;
+        int32_t *m_dClusterInds;
+
+        bool *m_dIsolatedVertices;
 
         int32_t *m_dAdjTriangle;
         int32_t *m_dEdgesCount;
@@ -127,22 +139,14 @@ class ParticleSystem
         int32_t *m_dEdgesSize;
         int32_t *m_dDegrees;
 
-        bool *m_dIsolatedVertices;
-
-        int32_t *m_dClusterInds;
-
         // grid data for sorting method
         uint  *m_dGridParticleHash; // grid hash value for each particle
         uint  *m_dGridParticleIndex;// particle index for each particle
         uint  *m_dCellStart;        // index of start of each cell in sorted list
         uint  *m_dCellEnd;          // index of end of cell
 
-        uint   m_gridSortBits;
-
         // params
         SimParams m_params;
-        uint3 m_gridSize;
-        uint m_numGridCells;
 
         StopWatchInterface *m_timer;
 };

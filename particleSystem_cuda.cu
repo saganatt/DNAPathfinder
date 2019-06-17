@@ -187,8 +187,7 @@ extern "C"
                       uint  *gridParticleIndex,
                       uint  *cellStart,
                       uint  *cellEnd,
-                      uint   numParticles,
-                      uint   numCells)
+                      uint   numParticles)
     {
     #if USE_TEX
         checkCudaErrors(cudaBindTexture(0, oldPosTex, sortedPos, numParticles*sizeof(float3)));
@@ -206,8 +205,7 @@ extern "C"
                 gridParticleIndex,
                 cellStart,
                 cellEnd,
-                numParticles,
-                numCells);
+                numParticles);
 
         // check if kernel invocation generated an error
         getLastCudaError("Kernel execution failed: connectPairsD");
@@ -341,6 +339,7 @@ extern "C"
     }
 
     void completeClusterStats(int32_t *edgesSize,
+                              float *oldPos,
                               int numParticles,
                               bool *frontier,
                               Cluster *cluster)
@@ -351,6 +350,7 @@ extern "C"
 
         // execute the kernel
         completeClusterStatsD<<< numBlocks, numThreads >>>(edgesSize,
+            (float3 *) oldPos,
             numParticles,
             frontier,
             cluster);

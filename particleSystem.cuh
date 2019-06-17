@@ -51,8 +51,7 @@ void connectPairs(int32_t *adjTriangle,
              uint  *gridParticleIndex,
              uint  *cellStart,
              uint  *cellEnd,
-             uint   numParticles,
-             uint   numCells);
+             uint   numParticles);
 
 void calcDegrees(int32_t *adjTriangle,
                  int32_t *edgesCount,
@@ -91,6 +90,7 @@ void nextLayer(int32_t level,
                int32_t currentClusterInd);
 
 void completeClusterStats(int32_t *edgesSize,
+                          float *oldPos,
                           int numParticles,
                           bool *frontier,
                           Cluster *cluster);

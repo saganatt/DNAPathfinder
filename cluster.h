@@ -14,15 +14,14 @@ struct Cluster
 
     float longestEdge;              // longest edge length
     float shortestEdge;             // shortest edge length
-    //float avEdge;                   // average edge length
 
     uint longestPathVertices;       // length of longest path in vertices
     float longestPath;              // longest path length
 
     uint branchingsCount;           // number of vertices of degree > 2
-    //float3 *leaves;                  // vertices of degree 1
-    //int32_t *leavesInd;             // indices of leaves in particle system
     uint leavesCount;               // number of vertices of degree 1
+
+    float3 massCentre;              // center of mass
 };
 
 #endif //__CLUSTER_H__

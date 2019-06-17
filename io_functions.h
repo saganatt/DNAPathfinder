@@ -169,6 +169,8 @@ void saveClustersStatsToCsv(std::vector<Cluster> clusters, std::string clustersF
         << "," << clusters[i].maxExtremesInd.x + 1 << "," << clusters[i].maxExtremesInd.y + 1
         << "," << clusters[i].maxExtremesInd.z + 1
         << "," << clusters[i].maxExtremes.x << "," << clusters[i].maxExtremes.y << "," << clusters[i].maxExtremes.z
+        << "," << clusters[i].massCentre.x << "," << clusters[i].massCentre.y
+        << "," << clusters[i].massCentre.z
         << std::endl;
     }
 
