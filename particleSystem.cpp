@@ -108,12 +108,6 @@ ParticleSystem::_initialize()
     allocateArray((void **)&m_dPos, 3 * sizeof(float) * m_numParticles);
     allocateArray((void **)&m_dSortedPos, 3 * sizeof(float) * m_numParticles);
 
-    //allocateArray((void **)&m_dClusterVertices, 3 * sizeof(float) * m_numClusters);
-    //allocateArray((void **)&m_dSortedClusterVertices, 3 * sizeof(float) * m_numClusters);
-    // TODO: Needed?
-    //allocateArray((void **)&m_dClusterVerticesInd, sizeof(uint) * m_numClusters);
-    //allocateArray((void **)&m_dSortedClusterVerticesInd, sizeof(uint) * m_numClusters);
-
     allocateArray((void **)&m_dIsolatedVertices, sizeof(bool) * m_numParticles);
 
     allocateArray((void **)&m_dClusterInds, sizeof(int32_t) * m_numParticles);
@@ -261,14 +255,6 @@ ParticleSystem::update()
 
 void
 ParticleSystem::_convertToAdjList() {
-//    getEdgesSize();
-//    printf("Vertices degrees:\n");
-//    for(int i = 0; i < m_numParticles; i++) {
-//        printf("%d: %d\n", i, m_hEdgesSize[i]);
-//    }
-//    printf("\n\n");
-//    dumpAdjTriangle();
-
     copyArrayFromDevice(&m_hEdgesCount, m_dEdgesCount, sizeof(int32_t));
     m_hEdgesCount /= 2;
 
@@ -276,7 +262,7 @@ ParticleSystem::_convertToAdjList() {
 
     // EdgesSize and EdgesOffset to store permanent values for the whole graph
     scanDegreesTh(m_numParticles, m_dEdgesSize, m_dEdgesOffset);
-    createAdjList(m_dAdjacencyList, m_dAdjTriangle, m_dEdgesOffset, m_dEdgesSize, m_numParticles, m_hIncrDegrees);
+    createAdjList(m_dAdjacencyList, m_dAdjTriangle, m_dEdgesOffset, m_dEdgesSize, m_numParticles);
 }
 
 void
@@ -385,7 +371,6 @@ ParticleSystem::_scanBfs() {
             countDegrees(m_dAdjacencyList, m_dEdgesOffset, m_dEdgesSize, d_parent, queueSize, d_currentQueue,
                          m_dDegrees, d_frontier);
             // doing scan on degrees
-            //scanDegreesTh(queueSize, m_dDegrees, m_dDegrees);
             scanDegrees(queueSize, m_dDegrees, m_hIncrDegrees, m_dDegrees);
             nextQueueSize = m_hIncrDegrees[(queueSize - 1) / 64 + 1];
             // assigning vertices to nextQueue
@@ -644,6 +629,15 @@ ParticleSystem::getEdgesSize()
 
     copyArrayFromDevice(m_hEdgesSize, m_dEdgesSize, m_numParticles*sizeof(int32_t));
     return m_hEdgesSize;
+}
+
+int32_t *
+ParticleSystem::getClusterInds()
+{
+    assert(m_bInitialized);
+
+    copyArrayFromDevice(m_hClusterInds, m_dClusterInds, m_numParticles*sizeof(int32_t));
+    return m_hClusterInds;
 }
 
 std::vector<Cluster>

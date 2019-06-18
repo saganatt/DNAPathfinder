@@ -31,6 +31,8 @@ class ParticleSystem
         int32_t *getEdgesOffset();
         int32_t *getEdgesSize();
 
+        int32_t *getClusterInds();
+
         std::vector<Cluster> getClusters();
 
         int32_t *getPairsInd();
@@ -38,6 +40,11 @@ class ParticleSystem
         int getNumParticles() const
         {
             return m_numParticles;
+        }
+
+        int32_t getEdgesCount() const
+        {
+            return m_hEdgesCount;
         }
 
         uint32_t getAdjTriangleSize() const
@@ -49,6 +56,7 @@ class ParticleSystem
         {
             return m_contourSize;
         }
+
         float3 getVoxelSize() const
         {
             return m_params.voxelSize;

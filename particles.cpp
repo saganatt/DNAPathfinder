@@ -103,15 +103,16 @@ int main(int argc, char **argv)
 
     //int32_t *pairsInd = psystem->getPairsInd();
 
-    int32_t *adjList = psystem->getAdjList();
-    int32_t *edgesOffset = psystem->getEdgesOffset();
-    int32_t *edgesSize = psystem->getEdgesSize();
-
     std::vector<Cluster> clusters = psystem->getClusters();
     saveClustersStatsToCsv(clusters, clustersFile);
 
+    int32_t *adjList = psystem->getAdjList();
+    int32_t *edgesOffset = psystem->getEdgesOffset();
+    int32_t *edgesSize = psystem->getEdgesSize();
+    int32_t *clusterInds = psystem->getClusterInds();
+
     //writeChimeraScript(pairsInd, script);
-    writeChimeraScriptFromAdjList(adjList, edgesOffset, edgesSize, script);
+    writeChimeraScriptFromAdjList(adjList, edgesOffset, edgesSize, clusters.size(), clusterInds, script);
 
     //delete [] pairsInd;
     delete [] adjList;

@@ -8,6 +8,7 @@
 #include <cnpy.h>
 
 #include "particleSystem.h"
+#include "colorGenerator.h"
 
 std::string defaultScript = "script.dp";
 std::string defaultContourFile = "data/nuc9-syg2v2.npy";
@@ -15,16 +16,17 @@ std::string defaultClustersFile = "data/clusters.csv";
 
 uint32_t numParticles = 0;
 ParticleSystem *psystem = 0;
+ColorGenerator *colorGen = 0;
 
 const float3 voxelSize = make_float3(7.00000014f, 7.00000014f, 7.00280101f);
 
 void getParticlesData(char *file, float* particles[], uint32_t* p_indices[]);
 void getContourMatrix(uint32_t *contour[], uint3 *contourSize, std::string matrixFile);
 
-std::string composeChimeraBondCommand(uint32_t ind1, uint32_t ind2);
+std::string composeChimeraBondCommand(uint32_t ind1, uint32_t ind2, int32_t clusterInd = 0);
 void writeChimeraScript(int32_t *pairsInd, std::string script);
-void writeChimeraScriptFromAdjList(int32_t *adjList, int32_t *edgesOffset, int32_t *edgesSize, std::string script);
-
+void writeChimeraScriptFromAdjList(int32_t *adjList, int32_t *edgesOffset, int32_t *edgesSize,
+                                   int32_t clustersCount, int32_t *clusterInds, std::string script);
 void saveClustersStatsToCsv(std::vector<Cluster> clusters, std::string clustersFile);
 
 void getParticlesData(char *file, float* particles[], uint32_t* p_indices[]) {
@@ -65,7 +67,7 @@ void getParticlesData(char *file, float* particles[], uint32_t* p_indices[]) {
     printf("Succesfully read all particles data\n\n");
 }
 
-std::string composeChimeraBondCommand(uint32_t ind1, uint32_t ind2) {
+std::string composeChimeraBondCommand(uint32_t ind1, uint32_t ind2, int32_t clusterInd) {
     if(ind1 == 0 || ind2 == 0) {
 #if DEBUG
         printf("Skipping empty pair\n");
@@ -74,7 +76,10 @@ std::string composeChimeraBondCommand(uint32_t ind1, uint32_t ind2) {
     }
     std::ostringstream stm;
     stm << "#0:" << ind1 << " #0:" << ind2;
-    return stm.str() ;
+    if(colorGen) {
+        stm << " " << colorGen->getNextColor(clusterInd);
+    }
+    return stm.str();
 }
 
 
@@ -98,7 +103,8 @@ void writeChimeraScript(int32_t *pairsInd, std::string script) {
     ofile.close();
 }
 
-void writeChimeraScriptFromAdjList(int32_t *adjList, int32_t *edgesOffset, int32_t *edgesSize, std::string script) {
+void writeChimeraScriptFromAdjList(int32_t *adjList, int32_t *edgesOffset, int32_t *edgesSize,
+    int32_t clustersCount, int32_t *clusterInds, std::string script) {
     std::ofstream ofile(script);
     if(!ofile) {
         printf("Could not open the file for writing.\n");
@@ -107,12 +113,14 @@ void writeChimeraScriptFromAdjList(int32_t *adjList, int32_t *edgesOffset, int32
 
     std::cout << "Writing new script to " << script << "..." << std::endl;
 
+    colorGen = new ColorGenerator(clustersCount);
+
     for(int i = 0; i < numParticles; i++)
     {
         for(int j = edgesOffset[i]; j < edgesOffset[i] + edgesSize[i]; j++)
         {
             if(adjList[j] > i) {
-                ofile << composeChimeraBondCommand(i + 1, adjList[j] + 1) << std::endl;
+                ofile << composeChimeraBondCommand(i + 1, adjList[j] + 1, clusterInds[i]) << std::endl;
             }
         }
     }

@@ -282,10 +282,10 @@ void compareClosest(int3    gridPos,
 __global__
 void connectPairsD(int32_t *adjTriangle,      // output: adjacency triangle
                   float3 *sortedPos,          // input: sorted positions
-                  uint  *gridParticleIndex,   // input: sorted particle indices
-                  uint  *cellStart,
-                  uint  *cellEnd,
-                  uint   numParticles)
+                  uint *gridParticleIndex,   // input: sorted particle indices
+                  uint *cellStart,
+                  uint *cellEnd,
+                  uint numParticles)
 {
     uint index = __mul24(blockIdx.x, blockDim.x) + threadIdx.x;
 
@@ -371,24 +371,12 @@ void createAdjListD(int32_t *adjacencyList,      // output: adjacency list
                     int32_t *adjTriangle,        // input: adjacency triangle
                     int32_t *edgesOffset,        // input: scanned degrees
                     int32_t *edgesSize,          // input: vertices degrees
-                    uint numParticles,        // input: number of vertices
-                    int32_t *d_incrDegrees)
+                    uint numParticles)           // input: number of vertices)
 {
     uint index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= numParticles) return;
 
-//    __shared__ int sharedIncrement;
-//    if (!threadIdx.x) {
-//        sharedIncrement = d_incrDegrees[index >> 10];
-//    }
-//    __syncthreads();
-//
-//    int sum = 0;
-//    if (threadIdx.x) {
-//        sum = edgesOffset[index - 1];
-//    }
-
-    int currentPos = edgesOffset[index]; //sharedIncrement + sum;
+    int currentPos = edgesOffset[index];
     for(int i = 0; i < index; i++)
     {
         if(getAdjTriangleEntry(adjTriangle, numParticles, index, i) > 0)
@@ -396,7 +384,6 @@ void createAdjListD(int32_t *adjacencyList,      // output: adjacency list
             if(currentPos >= edgesOffset[index] + edgesSize[index])
             {
                 printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos, edgesOffset[index], edgesSize[index]);
-                //return;
             }
             adjacencyList[currentPos] = i;
             currentPos++;
@@ -409,7 +396,6 @@ void createAdjListD(int32_t *adjacencyList,      // output: adjacency list
             if(currentPos >= edgesOffset[index] + edgesSize[index])
             {
                 printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos, edgesOffset[index], edgesSize[index]);
-                //return;
             }
             adjacencyList[currentPos] = i;
             currentPos++;
@@ -421,14 +407,13 @@ __global__
 void readAdjListD(int32_t *adjacencyList,      // output: adjacency list
                   int32_t *edgesOffset,        // input: scanned degrees
                   int32_t *edgesSize,          // input: vertices degrees
-                  uint numParticles)          // input: number of vertices)
+                  uint numParticles)           // input: number of vertices)
 {
     uint index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= numParticles) return;
 
     for(int i = edgesOffset[index]; i < edgesOffset[index] + edgesSize[index]; i++) {
-        printf("[%d] Read adj list. Vertex: %d at %d\n", index, adjacencyList[i], i);
-        //printf("[%d] %d\n", index, adjacencyList[i]);
+        printf("[%d] %d\n", index, adjacencyList[i]);
     }
 }
 

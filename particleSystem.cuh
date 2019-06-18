@@ -44,19 +44,19 @@ void checkContour(int32_t *adjTriangle,
                   float *oldPos,
                   uint32_t *contour,
                   uint3 contourSize,
-                  uint   numParticles);
+                  uint numParticles);
 
 void connectPairs(int32_t *adjTriangle,
              float *sortedPos,
-             uint  *gridParticleIndex,
-             uint  *cellStart,
-             uint  *cellEnd,
-             uint   numParticles);
+             uint *gridParticleIndex,
+             uint *cellStart,
+             uint *cellEnd,
+             uint numParticles);
 
 void calcDegrees(int32_t *adjTriangle,
                  int32_t *edgesCount,
                  int32_t *degrees,
-                 uint   numParticles);
+                 uint numParticles);
 
 void markIsolatedVertices(int32_t *degrees,
                           bool *isolatedVertices,
@@ -66,8 +66,7 @@ void createAdjList(int32_t *adjacencyList,
                    int32_t *adjTriangle,
                    int32_t *edgesOffset,
                    int32_t *edgesSize,
-                   uint numParticles,
-                   int32_t *d_incrDegrees);
+                   uint numParticles);
 
 void readAdjList(int32_t *adjacencyList,
                  int32_t *edgesOffset,

@@ -184,10 +184,10 @@ extern "C"
 
     void connectPairs(int32_t *adjTriangle,
                       float *sortedPos,
-                      uint  *gridParticleIndex,
-                      uint  *cellStart,
-                      uint  *cellEnd,
-                      uint   numParticles)
+                      uint *gridParticleIndex,
+                      uint *cellStart,
+                      uint *cellEnd,
+                      uint numParticles)
     {
     #if USE_TEX
         checkCudaErrors(cudaBindTexture(0, oldPosTex, sortedPos, numParticles*sizeof(float3)));
@@ -255,8 +255,7 @@ extern "C"
                        int32_t *adjTriangle,
                        int32_t *edgesOffset,
                        int32_t *edgesSize,
-                       uint numParticles,
-                       int32_t *d_incrDegrees)
+                       uint numParticles)
     {
         // thread per particle
         uint numThreads, numBlocks;
@@ -266,8 +265,7 @@ extern "C"
             adjTriangle,
             edgesOffset,
             edgesSize,
-            numParticles,
-            d_incrDegrees);
+            numParticles);
 
         // check if kernel invocation generated an error
         getLastCudaError("Kernel execution failed: createAdjListD");
@@ -444,5 +442,7 @@ extern "C"
         // check if kernel invocation generated an error
         getLastCudaError("Kernel execution failed: assignVerticesNextQueueD");
     }
+
+
 
 }   // extern "C"
