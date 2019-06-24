@@ -29,7 +29,7 @@
 #
 ################################################################################
 #
-# Makefile project only supported on Mac OS X and Linux Platforms)
+# Makefile project only supported on Mac OS X and Linux Platforms
 #
 ################################################################################
 
@@ -224,12 +224,17 @@ endif
 ifeq ($(dbg),1)
       NVCCFLAGS += -g -G
       BUILD_TYPE := debug
+      EXTRA_CCFLAGS += -DDEBUG=2
 else
       BUILD_TYPE := release
 endif
 
-EXTRA_CCFLAGS := -rdynamic
-EXTRA_NVCCFLAGS := -lineinfo
+ifdef print_dbg
+      EXTRA_CCFLAGS += -DDEBUG=$(print_dbg)
+endif
+
+#EXTRA_CCFLAGS := -rdynamic -Wall -Wextra
+#EXTRA_NVCCFLAGS := -lineinfo
 
 ALL_CCFLAGS :=
 ALL_CCFLAGS += $(NVCCFLAGS)
@@ -245,14 +250,14 @@ ifeq ($(TARGET_OS),qnx)
   SAMPLE_ENABLED := 0
 endif
 
-LDFLAGS += -rpath=lib -L lib -lcnpy -lz
+LDFLAGS += -rpath=../lib -L ../lib -lcnpy -lz
 ALL_LDFLAGS :=
 ALL_LDFLAGS += $(ALL_CCFLAGS)
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I inc -I .
+INCLUDES  := -I ../inc -I .
 LIBRARIES :=
 
 ################################################################################
@@ -297,25 +302,25 @@ else
 	@echo "Sample is ready - all dependencies have been met"
 endif
 
+filesIO.o:filesIO.cpp
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
 particleSystem.o:particleSystem.cpp
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-particleSystem_cuda.o:particleSystem_cuda.cu
+kernelWrappers.o:kernelWrappers.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
 particles.o:particles.cpp
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-particles: particleSystem.o particleSystem_cuda.o particles.o
+particles: filesIO.o particleSystem.o kernelWrappers.o particles.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-#	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
-#	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 
 run: build
 	$(EXEC) ./particles
 
 clean:
-	rm -f particles particleSystem.o particleSystem_cuda.o particles.o
-#	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/particles
+	rm -f particles particleSystem.o kernelWrappers.o particles.o filesIO.o
 
 clobber: clean
