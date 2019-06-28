@@ -48,7 +48,7 @@ void getParticlesData(std::vector<float3> &particles, std::vector<uint32_t> &p_i
 }
 
 void getContourMatrix(std::vector<uint32_t> &contour, uint3 &contourSize, const std::string &matrixFile) {
-    std::cout << "Loading contour matrix from: " << matrixFile << std::endl;
+    std::cout << "Loading contour matrix from: " << matrixFile << "..." << std::endl;
 
     cnpy::NpyArray array = cnpy::npy_load(matrixFile);
     assert(array.word_size == sizeof(uint32_t));
@@ -61,7 +61,7 @@ void getContourMatrix(std::vector<uint32_t> &contour, uint3 &contourSize, const 
     std::cout << "Contour size: "
               << contourSize.x << ", " << contourSize.y << ", " << contourSize.z << std::endl;
 
-    std::cout << "Succesfully read all contour data" << std::endl << std::endl;
+    std::cout << "Contour data read successfully." << std::endl << std::endl;
 }
 
 std::string composeChimeraBondCommand(ColorGenerator &colorGen, uint32_t ind1, uint32_t ind2,
@@ -161,12 +161,16 @@ void writeClustersStatsToCsv(const std::vector<Cluster> &clusters, bool suffix) 
     std::cout << "Saving clusters statistics to " << clustersCsvFilePath << "..." << std::endl;
 
     for (int32_t i = 0; i < clusters.size(); i++) {
-        ofile << i << "," << clusters[i].clusterSize
-              << "," << clusters[i].shortestEdge << "," << clusters[i].longestEdge
-              << "," << clusters[i].longestPath << "," << clusters[i].longestPathVertices
+        ofile << std::fixed << std::showpoint
+              << i << "," << clusters[i].clusterSize
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].shortestEdge
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].longestEdge
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].longestPath
+              << "," << clusters[i].longestPathVertices
               << "," << clusters[i].branchingsCount
-              << "," << clusters[i].centroid.x << "," << clusters[i].centroid.y
-              << "," << clusters[i].centroid.z
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].centroid.x
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].centroid.y
+              << "," << std::setprecision(3) << std::setw(5) << clusters[i].centroid.z
               << std::endl;
     }
 

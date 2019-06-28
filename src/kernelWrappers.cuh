@@ -9,8 +9,6 @@ void cudaInit(int32_t argc, char **argv);
 void freeArray(void *devPtr);
 void allocateArray(void **devPtr, size_t size);
 
-void threadSync();
-
 void setArray(void *devPtr, int32_t value, size_t count);
 void copyArrayFromDevice(void *host, const void *device, int32_t size);
 void copyArrayToDevice(void *device, const void *host, int32_t size);
@@ -86,7 +84,7 @@ void readAdjList(uint32_t *adjacencyList,
 void nextLayer(float *edgesLengths,
                float *distance,
                uint32_t *verticesDistance,
-               bool *frontier,
+               char *frontier,
                int32_t *clusterInds,
                float3 *pos,
                uint32_t *adjacencyList,
@@ -98,12 +96,19 @@ void nextLayer(float *edgesLengths,
                uint32_t queueSize);
 
 void countDegrees(uint32_t *degrees,
-                  bool *frontier,
+                  char *frontier,
                   uint32_t *adjacencyList,
                   uint32_t *edgesOffset,
                   uint32_t *edgesSize,
                   uint32_t *currentQueue,
                   uint32_t queueSize);
+
+void countDegrees2(uint32_t *degrees,
+                   char *frontier,
+                   uint32_t *adjacencyList,
+                   uint32_t *edgesOffset,
+                   uint32_t *edgesSize,
+                   uint32_t verticesCount);
 
 void scanDegrees(uint32_t *degrees, uint32_t *incrDegrees, uint32_t queueSize);
 
@@ -114,8 +119,17 @@ void assignVerticesNextQueue(uint32_t *nextQueue,
                              uint32_t *currentQueue,
                              uint32_t *degrees,
                              uint32_t *incrDegrees,
-                             bool *frontier,
+                             char *frontier,
                              uint32_t queueSize);
+
+void assignVerticesNextQueue2(uint32_t *nextQueue,
+                              uint32_t *adjacencyList,
+                              uint32_t *edgesOffset,
+                              uint32_t *edgesSize,
+                              uint32_t *degrees,
+                              uint32_t *incrDegrees,
+                              char *frontier,
+                              uint32_t verticesCount);
 
 void calcClusterCentroid(Cluster *cluster,
                          float3 *oldPos,
@@ -125,10 +139,7 @@ void calcClusterCentroid(Cluster *cluster,
 
 void calcClusterEdgeLengths(Cluster *cluster,
                             float *edgesLengths,
-                            uint32_t edgesCount,
-                            int32_t *clusterInds,
-                            uint32_t currentClusterInd,
-                            uint32_t numParticles);
+                            uint32_t edgesCount);
 
 void calcClusterPathLengths(Cluster *cluster,
                             float *distance,

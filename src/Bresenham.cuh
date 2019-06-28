@@ -4,18 +4,6 @@
 // Code adjusted from Will Navidson's (yamamushi) gist at:
 // https://gist.github.com/yamamushi/5823518#file-bresenham3d
 
-#include <helper_functions.h>
-
-#ifdef DEBUG
-#if (DEBUG == 1)
-#define DEBUG_LEVEL 1
-#elif (DEBUG == 2)
-#define DEBUG_LEVEL 2
-#endif
-#else
-#define DEBUG_LEVEL 0
-#endif
-
 // This function does NOT draw a line but instead it uses Bresenham algorithm
 // to check if all voxels along the line are non-zero.
 // pos1 and pos2 are voxel positions
@@ -125,7 +113,7 @@ bool checkPathInContour(float3 p1,                      // input: first particle
     uint3 pv2 = make_uint3((uint32_t)floorf(p2.x / voxelSize.x),
                            (uint32_t)floorf(p2.y / voxelSize.y), (uint32_t)floorf(p2.z / voxelSize.z));
 
-#if DEBUG_LEVEL == 2
+#if defined(DEBUG) && (DEBUG >= 3)
     if(contour[pv1.x + pv1.y * contourSize.x + pv1.z * contourSize.x * contourSize.y] == 0) {
         printf("Particle 1 at (%f, %f, %f), voxel: (%u, %u, %u) (%f, %f, %f) outside contour!\n",
                 p1.x, p1.y, p1.z, pv1.x, pv1.y, pv1.z,

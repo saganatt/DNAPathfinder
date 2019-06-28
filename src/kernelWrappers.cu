@@ -4,7 +4,6 @@
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
-#include <helper_functions.h>
 
 #include <thrust/device_ptr.h>
 #include <thrust/sort.h>
@@ -33,10 +32,6 @@ extern "C" {
 
     void allocateArray(void **devPtr, size_t size) {
         checkCudaErrors(cudaMalloc(devPtr, size));
-    }
-
-    void threadSync() {
-        checkCudaErrors(cudaDeviceSynchronize());
     }
 
     void setArray(void *devPtr, int32_t value, size_t count) {
@@ -252,7 +247,7 @@ extern "C" {
     void nextLayer(float *edgesLengths,
                    float *distance,
                    uint32_t *verticesDistance,
-                   bool *frontier,
+                   char *frontier,
                    int32_t *clusterInds,
                    float3 *pos,
                    uint32_t *adjacencyList,
@@ -284,7 +279,7 @@ extern "C" {
     }
 
     void countDegrees(uint32_t *degrees,
-                      bool *frontier,
+                      char *frontier,
                       uint32_t *adjacencyList,
                       uint32_t *edgesOffset,
                       uint32_t *edgesSize,
@@ -305,6 +300,26 @@ extern "C" {
         getLastCudaError("Kernel execution failed: countDegreesD");
     }
 
+    void countDegrees2(uint32_t *degrees,
+                       char *frontier,
+                       uint32_t *adjacencyList,
+                       uint32_t *edgesOffset,
+                       uint32_t *edgesSize,
+                       uint32_t verticesCount) {
+        // Thread per vertex
+        uint32_t numThreads, numBlocks;
+        computeGridSize(verticesCount, 64, numBlocks, numThreads);
+
+        countDegrees2D<<< numBlocks, numThreads >>>(degrees,
+                frontier,
+                adjacencyList,
+                edgesOffset,
+                edgesSize,
+                verticesCount);
+
+        getLastCudaError("Kernel execution failed: countDegrees2D");
+    }
+
     void scanDegrees(uint32_t *degrees, uint32_t *incrDegrees, uint32_t queueSize) {
         // Thread per queue member
         uint32_t numThreads, numBlocks;
@@ -314,8 +329,8 @@ extern "C" {
             incrDegrees,
             queueSize);
 
+        checkCudaErrors(cudaDeviceSynchronize());
         getLastCudaError("Kernel execution failed: scanDegreesD");
-        threadSync();
 
         // Count prefix sums on CPU for ends of blocks exclusive
         // Already written previous block sum
@@ -332,7 +347,7 @@ extern "C" {
                                  uint32_t *currentQueue,
                                  uint32_t *degrees,
                                  uint32_t *incrDegrees,
-                                 bool *frontier,
+                                 char *frontier,
                                  uint32_t queueSize) {
         // Thread per queue member
         uint32_t numThreads, numBlocks;
@@ -349,6 +364,30 @@ extern "C" {
             queueSize);
 
         getLastCudaError("Kernel execution failed: assignVerticesNextQueueD");
+    }
+
+    void assignVerticesNextQueue2(uint32_t *nextQueue,
+                                  uint32_t *adjacencyList,
+                                  uint32_t *edgesOffset,
+                                  uint32_t *edgesSize,
+                                  uint32_t *degrees,
+                                  uint32_t *incrDegrees,
+                                  char *frontier,
+                                  uint32_t verticesCount) {
+        // Thread per vertex
+        uint32_t numThreads, numBlocks;
+        computeGridSize(verticesCount, 64, numBlocks, numThreads);
+
+        assignVerticesNextQueue2D<<< numBlocks, numThreads >>>(nextQueue,
+                adjacencyList,
+                edgesOffset,
+                edgesSize,
+                degrees,
+                incrDegrees,
+                frontier,
+                verticesCount);
+
+        getLastCudaError("Kernel execution failed: assignVerticesNextQueue2D");
     }
 
     // Functions adapted from NVIDIA's reduce sample
@@ -541,98 +580,73 @@ extern "C" {
 
     void calcClusterEdgeLengths(Cluster *cluster,
                                 float *edgesLengths,
-                                uint32_t edgesCount,
-                                int32_t *clusterInds,
-                                uint32_t currentClusterInd,
-                                uint32_t numParticles) {
+                                uint32_t edgesCount) {
         // Thread per particle
         uint32_t numThreads, numBlocks;
-        computeGridSizePow2(numParticles, 64, 64, numBlocks, numThreads);
+        computeGridSizePow2(edgesCount, 64, 64, numBlocks, numThreads);
 
         // When there is only one warp per block, we need to allocate two warps
         // worth of shared memory for each array so that we don't index shared memory out of bounds
         uint32_t smemMul = (numThreads <= 32) ? 2 * numThreads : numThreads;
         uint32_t smemSize = smemMul * (sizeof(float3) + sizeof(uint32_t));
 
-        if (isPow2(numParticles)) {
+        if (isPow2(edgesCount)) {
             switch(numThreads) {
                 case 1024:
                     calcClusterEdgeLengthsD<1024, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 512:
                     calcClusterEdgeLengthsD<512, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 256:
                     calcClusterEdgeLengthsD<256, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 128:
                     calcClusterEdgeLengthsD<128, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 64:
                     calcClusterEdgeLengthsD<64, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 32:
                     calcClusterEdgeLengthsD<32, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 16:
                     calcClusterEdgeLengthsD<16, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 8:
                     calcClusterEdgeLengthsD<8, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 4:
                     calcClusterEdgeLengthsD<4, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 2:
                     calcClusterEdgeLengthsD<2, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 1:
                 default:
                     calcClusterEdgeLengthsD<1, true> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
             }
         }
@@ -641,80 +655,58 @@ extern "C" {
                 case 1024:
                     calcClusterEdgeLengthsD<1024, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 512:
                     calcClusterEdgeLengthsD<512, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 256:
                     calcClusterEdgeLengthsD<256, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 128:
                     calcClusterEdgeLengthsD<128, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 64:
                     calcClusterEdgeLengthsD<64, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 32:
                     calcClusterEdgeLengthsD<32, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 16:
                     calcClusterEdgeLengthsD<16, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 8:
                     calcClusterEdgeLengthsD<8, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 4:
                     calcClusterEdgeLengthsD<4, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 2:
                     calcClusterEdgeLengthsD<2, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
                 case 1:
                 default:
                     calcClusterEdgeLengthsD<1, false> << < numBlocks, numThreads, smemSize >> > (cluster,
                             edgesLengths,
-                            edgesCount,
-                            clusterInds,
-                            currentClusterInd);
+                            edgesCount);
                     break;
             }
         }

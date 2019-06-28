@@ -11,7 +11,8 @@
 #include "filesIO.h"
 
 const uint32_t defaultGridSize = 64;
-const float defaultSearchRadius = 16.0f; // 10 x atom size
+const float defaultSearchRadius = 10.0f;
+const int32_t defaultLoops = 0; // Loop until all clusters merged
 // Contour unit of space
 const float3 voxelSize = make_float3(7.00000014f, 7.00000014f, 7.00280101f);
 StopWatchInterface *timer = nullptr;
@@ -23,7 +24,8 @@ void runSystem(ParticleSystem &psystem, const uint32_t &numParticles);
 void usage(const char *name);
 
 void parseArguments(int32_t argc, char **argv, std::string &file, std::string &contourFile,
-                    uint32_t &gridDim, float &searchRadius, float &clustersSearchRadius);
+                    uint32_t &gridDim, float &searchRadius, float &clustersSearchRadius,
+                    int32_t &loops, bool &useContour);
 
 int32_t main(int argc, char **argv) {
     std::cout << "Starting DNA Pathfinder..." << std::endl << std::endl;
@@ -32,20 +34,31 @@ int32_t main(int argc, char **argv) {
     uint32_t gridDim = defaultGridSize;
     float searchRadius = defaultSearchRadius;
     float clustersSearchRadius = 2 * defaultSearchRadius;
+    int32_t loops = defaultLoops;
+    bool useContour = false;
     std::string file;
-    std::string contourFile = std::string(defaultContourFile);
+    std::string contourFile;
     script = std::string(defaultScript);
     clustersScript = std::string(defaultClustersScript);
     clustersCsvFile = std::string(defaultClustersCsvFile);
     clustersPdbFile = std::string(defaultClustersPdbFile);
 
     try {
-        parseArguments(argc, argv, file, contourFile, gridDim, searchRadius, clustersSearchRadius);
+        parseArguments(argc, argv, file, contourFile, gridDim, searchRadius,
+            clustersSearchRadius, loops, useContour);
     }
     catch (std::runtime_error &error) {
         std::cout << error.what() << std::endl;
         return EXIT_FAILURE;
     }
+
+    std::ostringstream stm;
+    stm << "_r" << searchRadius << "_cr" << clustersSearchRadius;
+    std::string commonSuffix = stm.str();
+    script += commonSuffix;
+    clustersScript += commonSuffix;
+    clustersCsvFile += commonSuffix;
+    clustersPdbFile += commonSuffix;
 
     uint3 gridSize = make_uint3(gridDim, gridDim, gridDim);
     std::cout << "Grid: " << gridSize.x << " x " << gridSize.y << " x " << gridSize.z
@@ -69,17 +82,19 @@ int32_t main(int argc, char **argv) {
 
     std::vector<uint32_t> contour;
     uint3 contourSize;
-    try {
-        getContourMatrix(contour, contourSize, contourFile);
-    }
-    catch (std::runtime_error &error) {
-        std::cout << error.what() << std::endl;
-        return EXIT_FAILURE;
+    if(useContour) {
+        try {
+            getContourMatrix(contour, contourSize, contourFile);
+        }
+        catch (std::runtime_error& error) {
+            std::cout << error.what() << std::endl;
+            return EXIT_FAILURE;
+        }
     }
 
     cudaInit(argc, argv);
     ParticleSystem psystem(numParticles, gridSize, particles, p_indices, searchRadius,
-                           clustersSearchRadius, contour, contourSize, voxelSize);
+                           clustersSearchRadius, contour, contourSize, voxelSize, loops, useContour);
     sdkCreateTimer(&timer);
     runSystem(psystem, numParticles);
 
@@ -96,7 +111,8 @@ int32_t main(int argc, char **argv) {
         writeChimeraScriptFromAdjList(adjList, edgesOffset, edgesSize, clusterInds,
                                       numParticles, colorGen, false);
         writeChimeraScriptFromClustersCandidatesList(clusterCandidatesInd, clusters.size(),
-                                                     clusterInds, numParticles, colorGen, false);
+                                                     clusterInds, numParticles,
+                                                     colorGen, false);
         writeClustersCentroidsToPdb(clusterCentroids, false);
         writeClustersStatsToCsv(clusters, false);
     }
@@ -128,7 +144,8 @@ void runSystem(ParticleSystem &psystem, const uint32_t &numParticles) {
 }
 
 void parseArguments(int32_t argc, char **argv, std::string &file, std::string &contourFile,
-                    uint32_t &gridDim, float &searchRadius, float &clustersSearchRadius) {
+                    uint32_t &gridDim, float &searchRadius, float &clustersSearchRadius,
+                    int32_t &loops, bool &useContour) {
     if (argc == 1) {
         std::cout << "No particles data provided." << std::endl;
         usage(argv[0]);
@@ -146,10 +163,28 @@ void parseArguments(int32_t argc, char **argv, std::string &file, std::string &c
             usage(argv[0]);
         }
         file.assign(ch);
+        if (file.length() < 4 || file.substr(file.length() - 4) != ".pdb") {
+            std::cout << "This is not a *.pdb file name!" << std::endl;
+            usage(argv[0]);
+        }
     }
     else {
         std::cout << "No particles data provided." << std::endl;
         usage(argv[0]);
+    }
+
+    if (checkCmdLineFlag(argc, (const char **)argv, "cf")) {
+        char *ch;
+        if (!getCmdLineArgumentString(argc, (const char **)argv, "cf", &ch)) {
+            std::cout << "Could not parse contour filename string." << std::endl;
+            usage(argv[0]);
+        }
+        contourFile.assign(ch);
+        if (contourFile.length() < 4 || contourFile.substr(contourFile.length() - 4) != ".npy") {
+            std::cout << "This is not a *.npy file name!" << std::endl;
+            usage(argv[0]);
+        }
+        useContour = true;
     }
 
     if (checkCmdLineFlag(argc, (const char **)argv, "g")) {
@@ -164,6 +199,10 @@ void parseArguments(int32_t argc, char **argv, std::string &file, std::string &c
         clustersSearchRadius = getCmdLineArgumentFloat(argc, (const char **)argv, "cr");
     }
 
+    if (checkCmdLineFlag(argc, (const char **)argv, "l")) {
+        loops = getCmdLineArgumentInt(argc, (const char **)argv, "l");
+    }
+
     if (checkCmdLineFlag(argc, (const char **)argv, "s")) {
         char *ch;
         if (!getCmdLineArgumentString(argc, (const char **)argv, "s", &ch)) {
@@ -173,9 +212,9 @@ void parseArguments(int32_t argc, char **argv, std::string &file, std::string &c
         script.assign(ch);
     }
 
-    if (checkCmdLineFlag(argc, (const char **)argv, "l")) {
+    if (checkCmdLineFlag(argc, (const char **)argv, "t")) {
         char *ch;
-        if (!getCmdLineArgumentString(argc, (const char **)argv, "l", &ch)) {
+        if (!getCmdLineArgumentString(argc, (const char **)argv, "t", &ch)) {
             std::cout << "Could not parse csv filename string." << std::endl;
             usage(argv[0]);
         }
@@ -199,40 +238,28 @@ void parseArguments(int32_t argc, char **argv, std::string &file, std::string &c
         }
         clustersScript.assign(ch);
     }
-
-    if (checkCmdLineFlag(argc, (const char **)argv, "c")) {
-        char *ch;
-        if (!getCmdLineArgumentString(argc, (const char **)argv, "c", &ch)) {
-            std::cout << "Could not parse contour filename string." << std::endl;
-            usage(argv[0]);
-        }
-        contourFile.assign(ch);
-        if (contourFile.substr(contourFile.length() - 4) != ".npy") {
-            std::cout << "This is not a *.npy file name!" << std::endl;
-            usage(argv[0]);
-        }
-    }
 }
 
 void usage(const char *name) {
     std::cout << "Usage: " << name << " [OPTION [=VALUE]]\n";
     std::cout << "Available options:\n";
-    std::cout << "-g, \t\tset grid size, default:\t\t\t\t\t\t\t\t" << defaultGridSize << "\n";
-    std::cout << "-f, \t\tspecifies path to the file with particles coordinates\n";
-    std::cout << "-s, \t\tspecifies prefix of output script for Chimera PseudoBond Reader, default:\t\t"
-              << defaultScript << "\n";
-    std::cout << "-l, \t\tspecifies prefix of output *.csv file with clusters statistics, default:\t\t"
-              << defaultClustersCsvFile << "\n";
-    std::cout << "-p, \t\tspecifies prefix of output *.pdb file with clusters mass centres, default:\t"
-              << defaultClustersPdbFile << "\n";
-    std::cout << "-cs, \t\tspecifies prefix of output clusters script for Chimera PseudoBond Reader, default:"
-              << defaultClustersScript << "\n";
-    std::cout << "-c, \t\tspecifies path to .npy contour file, default:\t\t\t\t\t"
-              << defaultContourFile << "\n";
-    std::cout << "-r, \t\tset search radius for particles pairs, default:\t\t\t\t\t"
+    std::cout << "-g \t\tset grid size, default:\t\t\t\t\t\t\t\t\t" << defaultGridSize << "\n";
+    std::cout << "-r \t\tset search radius for particles pairs, default:\t\t\t\t\t\t"
               << defaultSearchRadius << "\n";
-    std::cout << "-cr, \t\tset search radius for clusters pairs, default:\t\t\t\t\t"
+    std::cout << "-cr \t\tset search radius for clusters pairs, default:\t\t\t\t\t\t"
               << 2 * defaultSearchRadius << "\n";
-    std::cout << "-h, --help\tdisplay this help and exit" << std::endl;
+    std::cout << "-l \t\tset max number of main loops to execute, 0 means infinite, default:\t\t\t"
+              << defaultLoops << "\n";
+    std::cout << "-f \t\tspecifies path to the file with particles coordinates\n";
+    std::cout << "-cf \t\tspecifies path to .npy contour file\n";
+    std::cout << "-s \t\tspecifies prefix of output script for Chimera PseudoBond Reader, default:\t\t"
+              << defaultScript << "\n";
+    std::cout << "-t \t\tspecifies prefix of output *.csv file with clusters statistics, default:\t\t"
+              << defaultClustersCsvFile << "\n";
+    std::cout << "-p \t\tspecifies prefix of output *.pdb file with clusters mass centres, default:\t\t"
+              << defaultClustersPdbFile << "\n";
+    std::cout << "-cs \t\tspecifies prefix of output clusters script for Chimera PseudoBond Reader, default:\t"
+              << defaultClustersScript << "\n";
+    std::cout << "-h, --help\tdisplay this help and exit";
     throw std::runtime_error("");
 }

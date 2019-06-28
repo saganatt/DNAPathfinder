@@ -4,16 +4,18 @@
 #include <stdio.h>
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <sstream>
 #include <ios>
 #include <cnpy.h>
+
+#include <helper_timer.h>
 
 #include "particleSystem.h"
 #include "colorGenerator.h"
 
 const std::string defaultScript = "../data/results/all";
 const std::string defaultClustersScript = "../data/results/clusters";
-const std::string defaultContourFile = "../data/nuc9-syg2v2.npy";
 const std::string defaultClustersCsvFile = "../data/results/clusters";
 const std::string defaultClustersPdbFile = "../data/results/clusters";
 

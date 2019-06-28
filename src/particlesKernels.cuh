@@ -547,11 +547,6 @@ void connectClustersD(uint32_t *candidatesInds,         // output: pairs of part
                                      maxSearchRadius, centroids, clusterInds, sortedPos, oldPos,
                                      gridParticleIndex, cellStart, cellEnd);
         }
-
-//        printf("[%d] Connect clusters. Candidates: %d %d %d %d, edges: (%d %d) (%d %d)\n",
-//                index, candidatesInds[4 * index], candidatesInds[4 * index + 1], candidatesInds[4 * index + 2],
-//                candidatesInds[4 * index + 3], clusterEdges[4 * index], clusterEdges[4 * index + 1],
-//                clusterEdges[4 * index + 2], clusterEdges[4 * index + 3]);
     }
 }
 
@@ -605,20 +600,12 @@ void createAdjListD(uint32_t *adjacencyList,           // output: adjacency list
     uint32_t currentPos = edgesOffset[index];
     for (uint32_t i = 0; i < index; i++) {
         if (getAdjTriangleEntry(adjTriangle, index, i) > 0) {
-            if (currentPos >= edgesOffset[index] + edgesSize[index]) {
-                printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos,
-                       edgesOffset[index], edgesSize[index]);
-            }
             adjacencyList[currentPos] = i;
             currentPos++;
         }
     }
     for (uint32_t i = index + 1; i < params.numParticles; i++) {
         if (getAdjTriangleEntry(adjTriangle, index, i) > 0) {
-            if (currentPos >= edgesOffset[index] + edgesSize[index]) {
-                printf("[%d] Create adj list: index out of bonds: %d %d %d!\n", index, currentPos,
-                       edgesOffset[index], edgesSize[index]);
-            }
             adjacencyList[currentPos] = i;
             currentPos++;
         }

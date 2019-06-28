@@ -1,48 +1,24 @@
-/*
- * Copyright 1993-2015 NVIDIA Corporation.  All rights reserved.
- *
- * Please refer to the NVIDIA end user license agreement (EULA) associated
- * with this source code for terms and conditions that govern your use of
- * this software. Any use, reproduction, disclosure, or distribution of
- * this software and related documentation outside the terms of the EULA
- * is strictly prohibited.
- *
- */
-
 #include "particleSystem.h"
 #include "kernelWrappers.cuh"
-#include "kernelParams.cuh"
 
 #include <cuda_runtime.h>
-
-#include <helper_functions.h>
 #include <helper_cuda.h>
 #include <helper_math.h>
 
 #include <assert.h>
 #include <math.h>
-#include <memory.h>
-#include <cstdio>
-#include <cstdlib>
-#include <algorithm>
-
-#ifdef DEBUG
-#if (DEBUG == 1)
-#define DEBUG_LEVEL 1
-#elif (DEBUG == 2)
-#define DEBUG_LEVEL 2
-#endif
-#else
-#define DEBUG_LEVEL 0
-#endif
+#include <limits>
 
 ParticleSystem::ParticleSystem(uint32_t numParticles, uint3 gridSize, const std::vector<float3> &particles,
                                const std::vector<uint32_t> &p_indices, float searchRadius, float clustersSearchRadius,
-                               std::vector<uint32_t> &contour, uint3 contourSize, float3 voxelSize) :
+                               std::vector<uint32_t> &contour, uint3 contourSize, float3 voxelSize, int32_t loops,
+                               bool useContour) :
         m_bInitialized(false),
+        m_loopsNumber(loops),
         m_hPos(numParticles),
         m_hContour(contour),
         m_contourSize(contourSize),
+        m_useContour(useContour),
         m_adjTriangleSize((numParticles * (numParticles - 1)) / 2),
         m_hAdjTriangle(m_adjTriangleSize, 0),
         m_hEdgesCount(nullptr),
@@ -53,11 +29,15 @@ ParticleSystem::ParticleSystem(uint32_t numParticles, uint3 gridSize, const std:
         m_hClusterCentroids(0),
         m_hClustersMerged(nullptr),
         m_timer(nullptr) {
+    if (m_loopsNumber == 0) {
+        m_loopsNumber = std::numeric_limits<int32_t>::max();
+    }
+
     // Set kernel parameters
     m_params.gridSize = gridSize;
     m_params.numCells = gridSize.x * gridSize.y * gridSize.z;
     m_params.worldOrigin = make_float3(0.0f);
-    m_params.cellSize = make_float3(2.0f); // cell size equal to particle diameter (2 A)
+    m_params.cellSize = make_float3(2.0f); // Cell size equal to particle diameter (2 A)
     m_params.numParticles = numParticles;
     m_params.searchRadius = searchRadius;
     m_params.clustersSearchRadius = clustersSearchRadius;
@@ -85,9 +65,12 @@ ParticleSystem::_initialize() {
     copyArrayToDevice(m_dPos, m_hPos.data(), m_params.numParticles * sizeof(float3));
     allocateArray((void **)&m_dSortedPos, sizeof(float3) * m_params.numParticles);
     setArray(m_dSortedPos, 0, sizeof(float3) * m_params.numParticles);
-    allocateArray((void **)&m_dContour, sizeof(uint32_t) * m_contourSize.x * m_contourSize.y * m_contourSize.z);
-    copyArrayToDevice(m_dContour, m_hContour.data(),
-                      m_contourSize.x * m_contourSize.y * m_contourSize.z * sizeof(uint32_t));
+
+    if (m_useContour) {
+        allocateArray((void**) &m_dContour, sizeof(uint32_t) * m_contourSize.x * m_contourSize.y * m_contourSize.z);
+        copyArrayToDevice(m_dContour, m_hContour.data(),
+                          m_contourSize.x * m_contourSize.y * m_contourSize.z * sizeof(uint32_t));
+    }
 
     allocateArray((void **)&m_dAdjTriangle, sizeof(int32_t) * m_adjTriangleSize);
     setArray(m_dAdjTriangle, 0, m_adjTriangleSize * sizeof(int32_t));
@@ -128,7 +111,10 @@ ParticleSystem::_finalize() {
 
     freeArray(m_dPos);
     freeArray(m_dSortedPos);
-    freeArray(m_dContour);
+
+    if (m_useContour) {
+        freeArray(m_dContour);
+    }
 
     freeArray(m_dAdjTriangle);
 
@@ -160,9 +146,6 @@ ParticleSystem::update() {
     assert(m_bInitialized);
 
     // Calculate grid hash
-#if (DEBUG_LEVEL >= 1)
-    printf("Calculating the hash\n");
-#endif
     calcHash(
             m_dGridParticleHash,
             m_dGridParticleIndex,
@@ -170,16 +153,10 @@ ParticleSystem::update() {
             m_params.numParticles);
 
     // Sort particles based on hash
-#if (DEBUG_LEVEL >= 1)
-    printf("Sorting particles\n");
-#endif
     sortParticles(m_dGridParticleHash, m_dGridParticleIndex, m_params.numParticles);
 
     // Reorder particle arrays into sorted order and
     // find start and end of each cell
-#if (DEBUG_LEVEL >= 1)
-    printf("Reordering data\n");
-#endif
     reorderDataAndFindCellStart(
             m_dCellStart,
             m_dCellEnd,
@@ -189,21 +166,17 @@ ParticleSystem::update() {
             m_dPos,
             m_params.numParticles);
 
-    // Initialise adj triangle - check which pairs can be connected inside the contour
-#if (DEBUG_LEVEL >= 1)
-    printf("Checking contour\n");
-#endif
-    checkContour(
+    if (m_useContour) {
+        // Initialise adj triangle - check which pairs can be connected inside the contour
+        checkContour(
             m_dAdjTriangle,
             m_adjTriangleSize,
             m_dPos,
             m_dContour,
             m_contourSize);
+    }
 
     // Find pairs of closest points and connect
-#if (DEBUG_LEVEL >= 1)
-    printf("Connecting particles\n");
-#endif
     connectParticles(
             m_dAdjTriangle,
             m_dSortedPos,
@@ -213,56 +186,23 @@ ParticleSystem::update() {
             m_params.numParticles);
 
     // Find degree of each vertex
-#if (DEBUG_LEVEL >= 1)
-    printf("Calculating degrees\n");
-    threadSync();
-    sdkResetTimer(&m_timer);
-    sdkStartTimer(&m_timer);
-#endif
     calcDegrees(
             m_hEdgesCount,
             m_dEdgesSize,
             m_dAdjTriangle,
             m_params.numParticles);
-#if (DEBUG_LEVEL >= 1)
-    threadSync();
-    sdkStopTimer(&m_timer);
-    _printTimerInfo();
-#endif
 
     // Find isolated vertices
-#if (DEBUG_LEVEL >= 1)
-    printf("Finding isolated vertices\n");
-    threadSync();
-    sdkResetTimer(&m_timer);
-    sdkStartTimer(&m_timer);
-#endif
     markIsolatedVertices(
             m_dIsolatedVertices,
             m_dEdgesSize,
             m_params.numParticles);
-#if (DEBUG_LEVEL >= 1)
-    threadSync();
-    sdkStopTimer(&m_timer);
-    _printTimerInfo();
-#endif
 
     // Create adjacency list
-#if (DEBUG_LEVEL >= 1)
-    printf("Converting to adj list\n");
-    threadSync();
-    sdkResetTimer(&m_timer);
-    sdkStartTimer(&m_timer);
-#endif
     _convertToAdjList();
-#if (DEBUG_LEVEL >= 1)
-    threadSync();
-    sdkStopTimer(&m_timer);
-    _printTimerInfo();
-#endif
 
     // Write adjacency list on stdout
-#if (DEBUG_LEVEL == 2)
+#if defined(DEBUG) && (DEBUG >= 3)
     printf("Adjacency list, number of particles: %d edges count: %d\n",
                 m_params.numParticles, m_hEdgesCount[0]);
     readAdjList(m_dAdjacencyList,
@@ -272,48 +212,41 @@ ParticleSystem::update() {
 #endif
 
     // Perform a BFS on the graph
-#if (DEBUG_LEVEL >= 1)
+#if defined(DEBUG) && (DEBUG >= 2)
     printf("Starting BFS\n");
-    threadSync();
+    checkCudaErrors(cudaDeviceSynchronize());
     sdkResetTimer(&m_timer);
     sdkStartTimer(&m_timer);
 #endif
     _scanBfs();
-#if (DEBUG_LEVEL >= 1)
-    threadSync();
+#if defined(DEBUG) && (DEBUG >= 2)
+    checkCudaErrors(cudaDeviceSynchronize());
     sdkStopTimer(&m_timer);
-    _printTimerInfo();
+    _printTimerInfo("Graph BFS.");
 #endif
 
     // The main loop: merge clusters until only one is left
     int32_t i = 0;
     do {
-#if (DEBUG_LEVEL >= 1)
+#if defined(DEBUG) && (DEBUG >= 2)
         printf("Loop %d: %lu clusters\n", i, m_hClusters.size());
 #endif
 
-#if (DEBUG_LEVEL >= 1)
-        printf("Connecting clusters\n");
-        threadSync();
+#if defined(DEBUG) && (DEBUG >= 2)
+        checkCudaErrors(cudaDeviceSynchronize());
         sdkResetTimer(&m_timer);
         sdkStartTimer(&m_timer);
 #endif
         _connectClusters(i > 0);
-#if (DEBUG_LEVEL >= 1)
-        threadSync();
+#if defined(DEBUG) && (DEBUG >= 2)
+        checkCudaErrors(cudaDeviceSynchronize());
         sdkStopTimer(&m_timer);
-        _printTimerInfo();
+        _printTimerInfo("Connecting clusters.");
 #endif
 
-#if (DEBUG_LEVEL >= 1)
+#if defined(DEBUG) && (DEBUG >= 1)
         printf("Saving clusters to files\n");
-        threadSync();
-        sdkResetTimer(&m_timer);
-        sdkStartTimer(&m_timer);
         _saveClustersToFiles();
-        threadSync();
-        sdkStopTimer(&m_timer);
-        _printTimerInfo();
 #endif
 
         m_hEdgesCount[0] = 0;
@@ -321,54 +254,21 @@ ParticleSystem::update() {
         setArray(m_dEdgesSize, 0, sizeof(uint32_t) * m_params.numParticles);
         setArray(m_dIsolatedVertices, 0, sizeof(char) * m_params.numParticles);
 
-#if (DEBUG_LEVEL >= 1)
-        printf("Calculating degrees\n");
-        threadSync();
-        sdkResetTimer(&m_timer);
-        sdkStartTimer(&m_timer);
-#endif
         calcDegrees(
                 m_hEdgesCount,
                 m_dEdgesSize,
                 m_dAdjTriangle,
                 m_params.numParticles);
-#if (DEBUG_LEVEL >= 1)
-        threadSync();
-        sdkStopTimer(&m_timer);
-        _printTimerInfo();
-#endif
 
-#if (DEBUG_LEVEL >= 1)
-        printf("Finding isolated vertices\n");
-        threadSync();
-        sdkResetTimer(&m_timer);
-        sdkStartTimer(&m_timer);
-#endif
         markIsolatedVertices(
                 m_dIsolatedVertices,
                 m_dEdgesSize,
                 m_params.numParticles);
-#if (DEBUG_LEVEL >= 1)
-        threadSync();
-        sdkStopTimer(&m_timer);
-        _printTimerInfo();
-#endif
 
-#if (DEBUG_LEVEL >= 1)
-        printf("Converting to adj list\n");
-        threadSync();
-        sdkResetTimer(&m_timer);
-        sdkStartTimer(&m_timer);
-#endif
         freeArray(m_dAdjacencyList);
         _convertToAdjList();
-#if (DEBUG_LEVEL >= 1)
-        threadSync();
-        sdkStopTimer(&m_timer);
-        _printTimerInfo();
-#endif
 
-#if (DEBUG_LEVEL == 2)
+#if defined(DEBUG) && (DEBUG >= 3)
         printf("Adjacency list, number of particles: %d edges count: %d\n",
                 m_params.numParticles, m_hEdgesCount[0]);
         readAdjList(m_dAdjacencyList,
@@ -377,29 +277,29 @@ ParticleSystem::update() {
                     m_params.numParticles);
 #endif
 
-#if (DEBUG_LEVEL >= 1)
+#if defined(DEBUG) && (DEBUG >= 2)
         printf("Starting BFS\n");
-        threadSync();
+        checkCudaErrors(cudaDeviceSynchronize());
         sdkResetTimer(&m_timer);
         sdkStartTimer(&m_timer);
 #endif
         _scanBfs();
-#if (DEBUG_LEVEL >= 1)
-        threadSync();
+#if defined(DEBUG) && (DEBUG >= 2)
+        checkCudaErrors(cudaDeviceSynchronize());
         sdkStopTimer(&m_timer);
-        _printTimerInfo();
+        _printTimerInfo("Graph BFS.");
 #endif
 
         i++;
-    } while(m_hClusters.size() > 1);
+    } while (m_hClusters.size() > 1 && i < m_loopsNumber);
 }
 
 void
 ParticleSystem::_convertToAdjList() {
-    threadSync();
+    checkCudaErrors(cudaDeviceSynchronize());
     m_hEdgesCount[0] /= 2;
 
-#if (DEBUG_LEVEL >= 1)
+#if defined(DEBUG) && (DEBUG >= 2)
     printf("Edges count: %d\n", m_hEdgesCount[0]);
 #endif
 
@@ -412,15 +312,15 @@ ParticleSystem::_convertToAdjList() {
 
 void
 ParticleSystem::_initBfs(uint32_t **d_currentQueue, uint32_t **d_nextQueue,
-                         float **d_distance, uint32_t **d_verticesDistance,
-                         uint32_t **d_degrees, bool **d_frontier, float **d_edgesLengths,
+                         float **d_distance, uint32_t **d_verticesDistance, char **d_frontier,
+                         uint32_t **d_degrees, float **d_edgesLengths,
                          Cluster **d_currentCluster, Cluster *h_initCluster) {
     allocateArray((void **)d_currentQueue, sizeof(uint32_t) * m_params.numParticles);
     allocateArray((void **)d_nextQueue, sizeof(uint32_t) * m_params.numParticles);
     allocateArray((void **)d_distance, sizeof(uint32_t) * m_params.numParticles);
     allocateArray((void **)d_verticesDistance, sizeof(uint32_t) * m_params.numParticles);
+    allocateArray((void **)d_frontier, sizeof(char) * m_params.numParticles);
     allocateArray((void **)d_degrees, sizeof(uint32_t) * m_params.numParticles);
-    allocateArray((void **)d_frontier, sizeof(bool) * m_params.numParticles);
     allocateArray((void **)d_edgesLengths, sizeof(float) * m_hEdgesCount[0] * 2);
     allocateArray((void **)d_currentCluster, sizeof(Cluster));
 
@@ -429,6 +329,7 @@ ParticleSystem::_initBfs(uint32_t **d_currentQueue, uint32_t **d_nextQueue,
     m_hClusterCentroids.clear();
 
     h_initCluster->shortestEdge = std::numeric_limits<float>::max();
+    h_initCluster->longestEdge = 0.0f;
     h_initCluster->longestPath = 0.0f;
     h_initCluster->longestPathVertices = 0;
     h_initCluster->clusterSize = 0;
@@ -442,14 +343,15 @@ ParticleSystem::_initBfs(uint32_t **d_currentQueue, uint32_t **d_nextQueue,
 void
 ParticleSystem::_initLoopBfs(std::vector<float> &h_distance, std::vector<uint32_t> &h_verticesDistance,
                              int32_t startVertex, uint32_t **d_currentQueue, uint32_t **d_nextQueue,
-                             float **d_distance, uint32_t **d_verticesDistance, uint32_t **d_degrees,
-                             float **d_edgesLengths, Cluster **d_currentCluster, Cluster *h_initCluster,
-                             uint32_t &clusterInd) {
+                             float **d_distance, uint32_t **d_verticesDistance, char **d_frontier,
+                             uint32_t **d_degrees, float **d_edgesLengths,
+                             Cluster **d_currentCluster, Cluster *h_initCluster, uint32_t &clusterInd) {
     copyArrayFromDevice(m_hClusterInds.data(), m_dClusterInds, m_params.numParticles * sizeof(int32_t));
-    threadSync();
     if (m_hClusterInds[startVertex] > -1) {
         clusterInd = m_hClusterInds[startVertex];
+        // Comment this and
         copyArrayToDevice(*d_currentCluster, &(m_hClusters[clusterInd]), sizeof(Cluster));
+        // Uncomment this to prune BFS when no path statistics are needed
         //return;
     }
     else {
@@ -465,6 +367,8 @@ ParticleSystem::_initLoopBfs(std::vector<float> &h_distance, std::vector<uint32_
     copyArrayToDevice(*d_verticesDistance, h_verticesDistance.data(),
                       m_params.numParticles * sizeof(uint32_t));
 
+    setArray(*d_frontier, 0, m_params.numParticles * sizeof(char));
+
     setArray(*d_degrees, 0, m_params.numParticles * sizeof(uint32_t));
     setArray(m_hIncrDegrees, 0, m_params.numParticles * sizeof(uint32_t));
 
@@ -473,7 +377,7 @@ ParticleSystem::_initLoopBfs(std::vector<float> &h_distance, std::vector<uint32_
     uint32_t firstElementQueue = startVertex;
     copyArrayToDevice(*d_currentQueue, &firstElementQueue, sizeof(uint32_t));
 
-    setArray(*d_edgesLengths, 0, m_hEdgesCount[0] * 2 * sizeof(float));
+    setArray(*d_edgesLengths, -1.0f, m_hEdgesCount[0] * 2 * sizeof(float));
 }
 
 void
@@ -483,7 +387,7 @@ ParticleSystem::_scanBfs() {
     float *d_distance;
     uint32_t *d_verticesDistance;
     uint32_t *d_degrees;
-    bool *d_frontier;
+    char *d_frontier;
     float *d_edgesLengths;
     Cluster *d_currentCluster;
 
@@ -495,9 +399,8 @@ ParticleSystem::_scanBfs() {
     std::vector<uint32_t> h_verticesDistance =
             std::vector<uint32_t>(m_params.numParticles, std::numeric_limits<uint32_t>::max());
 
-    _initBfs(&d_currentQueue, &d_nextQueue, &d_distance, &d_verticesDistance,
-             &d_degrees, &d_frontier, &d_edgesLengths, &d_currentCluster, h_initCluster);
-    threadSync();
+    _initBfs(&d_currentQueue, &d_nextQueue, &d_distance, &d_verticesDistance, &d_frontier,
+             &d_degrees, &d_edgesLengths, &d_currentCluster, h_initCluster);
 
     for (int32_t startVertex = 0; startVertex < m_params.numParticles; startVertex++) {
         if (m_hIsolatedVertices[startVertex] == 1) {
@@ -506,8 +409,9 @@ ParticleSystem::_scanBfs() {
 
         uint32_t clusterInd = m_hClusters.size();
         _initLoopBfs(h_distance, h_verticesDistance, startVertex, &d_currentQueue, &d_nextQueue,
-                     &d_distance, &d_verticesDistance, &d_degrees, &d_edgesLengths, &d_currentCluster,
-                     h_initCluster, clusterInd);
+                     &d_distance, &d_verticesDistance, &d_frontier, &d_degrees, &d_edgesLengths,
+                     &d_currentCluster, h_initCluster, clusterInd);
+        // Uncomment this to prune BFS when no path statistics are needed
         //if(clusterInd < m_hClusters.size()) {
         //    continue;
         //}
@@ -516,33 +420,53 @@ ParticleSystem::_scanBfs() {
         uint32_t nextQueueSize = 0;
         int32_t level = 1;
         while (queueSize) {
-            setArray(d_frontier, false, m_params.numParticles * sizeof(bool));
-            threadSync();
+            setArray(d_frontier, 0, m_params.numParticles * sizeof(char));
             nextLayer(
-                    d_edgesLengths,
-                    d_distance,
-                    d_verticesDistance,
-                    d_frontier,
-                    m_dClusterInds,
-                    m_dPos,
-                    m_dAdjacencyList,
-                    m_dEdgesOffset,
-                    m_dEdgesSize,
-                    d_currentQueue,
-                    level,
-                    clusterInd,
-                    queueSize);
+                d_edgesLengths,
+                d_distance,
+                d_verticesDistance,
+                d_frontier,
+                m_dClusterInds,
+                m_dPos,
+                m_dAdjacencyList,
+                m_dEdgesOffset,
+                m_dEdgesSize,
+                d_currentQueue,
+                level,
+                clusterInd,
+                queueSize);
             countDegrees(
+                d_degrees,
+                d_frontier,
+                m_dAdjacencyList,
+                m_dEdgesOffset,
+                m_dEdgesSize,
+                d_currentQueue,
+                queueSize);
+            scanDegrees(d_degrees, m_hIncrDegrees, queueSize);
+            nextQueueSize = m_hIncrDegrees[(queueSize - 1) / 64 + 1];
+            if (nextQueueSize >= m_params.numParticles) { // Prune the queue - remove repetitions
+                countDegrees2(
                     d_degrees,
                     d_frontier,
                     m_dAdjacencyList,
                     m_dEdgesOffset,
                     m_dEdgesSize,
-                    d_currentQueue,
-                    queueSize);
-            scanDegrees(d_degrees, m_hIncrDegrees, queueSize);
-            nextQueueSize = m_hIncrDegrees[(queueSize - 1) / 64 + 1];
-            assignVerticesNextQueue(
+                    m_params.numParticles);
+                scanDegrees(d_degrees, m_hIncrDegrees, m_params.numParticles);
+                nextQueueSize = m_hIncrDegrees[(m_params.numParticles - 1) / 64 + 1];
+                assignVerticesNextQueue2(
+                    d_nextQueue,
+                    m_dAdjacencyList,
+                    m_dEdgesOffset,
+                    m_dEdgesSize,
+                    d_degrees,
+                    m_hIncrDegrees,
+                    d_frontier,
+                    m_params.numParticles);
+            }
+            else {
+                assignVerticesNextQueue(
                     d_nextQueue,
                     m_dAdjacencyList,
                     m_dEdgesOffset,
@@ -552,7 +476,8 @@ ParticleSystem::_scanBfs() {
                     m_hIncrDegrees,
                     d_frontier,
                     queueSize);
-            threadSync();
+            }
+            checkCudaErrors(cudaDeviceSynchronize());
             level++;
             queueSize = nextQueueSize;
             std::swap(d_currentQueue, d_nextQueue);
@@ -581,10 +506,7 @@ ParticleSystem::_scanBfs() {
             calcClusterEdgeLengths(
                     d_currentCluster,
                     d_edgesLengths,
-                    m_hEdgesCount[0],
-                    m_dClusterInds,
-                    clusterInd,
-                    m_params.numParticles);
+                    m_hEdgesCount[0] * 2);
             calcClusterBranchingsCount(
                     d_currentCluster,
                     m_dEdgesSize,
@@ -592,7 +514,6 @@ ParticleSystem::_scanBfs() {
                     clusterInd,
                     m_params.numParticles);
             copyArrayFromDevice(h_currentCluster, d_currentCluster, sizeof(Cluster));
-            threadSync();
             h_currentCluster->centroid.x /= h_currentCluster->clusterSize;
             h_currentCluster->centroid.y /= h_currentCluster->clusterSize;
             h_currentCluster->centroid.z /= h_currentCluster->clusterSize;
@@ -637,8 +558,8 @@ ParticleSystem::_connectClusters(bool free) {
     float minSearchRadius = 0.0f;
     float maxSearchRadius = m_params.clustersSearchRadius;
     while (!m_hClustersMerged[0]) {
-#if (DEBUG_LEVEL >= 1)
-        printf("Not merged yet, radius: %f-%f, number of clusters: %lu\n",
+#if defined(DEBUG) && (DEBUG >= 2)
+        printf("Connecting clusters, radius: %f-%f, number of clusters: %lu\n",
                 minSearchRadius, maxSearchRadius, m_hClusters.size());
 #endif
         connectClusters(
@@ -656,7 +577,7 @@ ParticleSystem::_connectClusters(bool free) {
                 m_dGridParticleIndex,
                 m_dCellStart,
                 m_dCellEnd);
-        threadSync();
+        checkCudaErrors(cudaDeviceSynchronize());
         minSearchRadius = maxSearchRadius;
         maxSearchRadius += m_params.clustersSearchRadius;
     }
@@ -685,13 +606,11 @@ ParticleSystem::_saveClustersToFiles() {
 }
 
 void 
-ParticleSystem::_printTimerInfo() {
+ParticleSystem::_printTimerInfo(std::string str) {
     float fAvgSeconds = ((float)1.0e-3 * (float)sdkGetTimerValue(&m_timer));
 
-    std::cout << "DNAPathfinder, Throughput = " 
-              << std::setprecision(4) << (1.0e-3 * m_params.numParticles) / fAvgSeconds
-              << " KParticles/s, Time = " << std::setprecision(5) << fAvgSeconds
-              << " s, Size = " << m_params.numParticles << std::endl << std::endl;
+    std::cout << "DNAPathfinder " << str
+              << " Time = " << std::setprecision(5) << fAvgSeconds << " s\n" << std::endl;
 }
 
 void
@@ -739,10 +658,10 @@ void
 ParticleSystem::dumpClusters() {
     printf("Detected clusters: %lu\n", m_hClusters.size());
     for (int32_t i = 0; i < m_hClusters.size(); i++) {
-        printf("%d size: %d shortest edge: %f longest edge: %f "
-               "longest path: %f longest path in vertices: %d\n"
+        printf("%d size: %d shortest edge: %5.3f longest edge: %5.3f "
+               "longest path: %5.3f longest path in vertices: %d\n"
                "number of branchings: %d\n"
-               "centroid: (%f %f %f)\n",
+               "centroid: (%5.3f %5.3f %5.3f)\n",
                i, m_hClusters[i].clusterSize, m_hClusters[i].shortestEdge, m_hClusters[i].longestEdge,
                m_hClusters[i].longestPath, m_hClusters[i].longestPathVertices,
                m_hClusters[i].branchingsCount,

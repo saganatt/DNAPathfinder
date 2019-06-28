@@ -1,11 +1,9 @@
 #ifndef __PARTICLE_SYSTEM_H__
 #define __PARTICLE_SYSTEM_H__
 
-#include <helper_functions.h>
 #include <stdint.h>
 
 #include "kernelParams.cuh"
-#include "vector_functions.h"
 #include "cluster.h"
 #include "filesIO.h"
 
@@ -14,7 +12,8 @@ class ParticleSystem {
     public:
         ParticleSystem(uint32_t numParticles, uint3 gridSize, const std::vector<float3> &particles,
                        const std::vector<uint32_t> &p_indices, float searchRadius, float clustersSearchRadius,
-                       std::vector<uint32_t> &contour, uint3 contourSize, float3 voxelSize);
+                       std::vector<uint32_t> &contour, uint3 contourSize, float3 voxelSize, int32_t loops,
+                       bool useContour);
 
         ~ParticleSystem();
 
@@ -56,15 +55,15 @@ class ParticleSystem {
         void _convertToAdjList();
 
         void _initBfs(uint32_t **d_currentQueue, uint32_t **d_nextQueue,
-                      float **d_distance, uint32_t **d_verticesDistance,
-                      uint32_t **d_degrees, bool **d_frontier, float **d_edgesLengths,
+                      float **d_distance, uint32_t **d_verticesDistance, char **d_frontier,
+                      uint32_t **d_degrees, float **d_edgesLengths,
                       Cluster **d_currentCluster, Cluster *h_initCluster);
 
         void _initLoopBfs(std::vector<float> &h_distance, std::vector<uint32_t> &h_verticesDistance,
                           int32_t startVertex, uint32_t **d_currentQueue, uint32_t **d_nextQueue,
-                          float **d_distance, uint32_t **d_verticesDistance, uint32_t **d_degrees,
-                          float **edgesLengths, Cluster **d_currentCluster, Cluster *h_initCluster,
-                          uint32_t &clusterInd);
+                          float **d_distance, uint32_t **d_verticesDistance, char **d_frontier,
+                          uint32_t **d_degrees, float **edgesLengths,
+                          Cluster **d_currentCluster, Cluster *h_initCluster, uint32_t &clusterInd);
 
         void _scanBfs();
 
@@ -72,10 +71,13 @@ class ParticleSystem {
 
         void _saveClustersToFiles();
 
-        void _printTimerInfo();
+        void _printTimerInfo(std::string str = "");
 
     private: // data
         bool m_bInitialized;
+
+        int32_t m_loopsNumber;                      // max number of main loops to execute
+                                                    // 0 means infinite (loop until all clusters merged)
 
         // CPU data
         std::vector<float3> m_hPos;                 // particle positions
@@ -84,6 +86,7 @@ class ParticleSystem {
         // Multiply each coordinate by voxelSize to get world coordinates of given matrix cell
         std::vector<uint32_t> m_hContour;           // values from contour matrix
         uint3 m_contourSize;                        // matrix sizes in each dimension
+        bool m_useContour;                          // whether there is contour to be processed
 
         uint32_t m_adjTriangleSize;                 // size of adjacency triangle
         std::vector<int32_t> m_hAdjTriangle;        // upper half of adjacency matrix without main diagonal

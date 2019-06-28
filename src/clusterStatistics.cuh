@@ -5,49 +5,12 @@
 #include <math.h>
 
 #include "kernelParams.cuh"
+#include "helpers.cuh"
 #include "cluster.h"
 
 // Maximum and minimum possible values for a particle coordinate
-#define MAX_POS 10000
-#define MIN_POS 0
-
-// Atomic max for float
-// Computes max of *address and val and stores the result at address
-// Robert Crovella's code from: https://stackoverflow.com/questions/17371275/implementing-max-reduce-in-cuda
-__device__
-float atomicMaxf(float* address, float val) {
-    int32_t *address_as_int =(int32_t*)address;
-    int32_t old = *address_as_int, assumed;
-    while (val > __int_as_float(old)) {
-        assumed = old;
-        old = atomicCAS(address_as_int, assumed,
-                        __float_as_int(val));
-    }
-    return __int_as_float(old);
-}
-
-// Atomic min for float
-// Computes min of *address and val and stores the result at address
-__device__
-float atomicMinf(float* address, float val) {
-    int32_t *address_as_int =(int32_t*)address;
-    int32_t old = *address_as_int, assumed;
-    while (val < __int_as_float(old)) {
-        assumed = old;
-        old = atomicCAS(address_as_int, assumed,
-                        __float_as_int(val));
-    }
-    return __int_as_float(old);
-}
-
-// += overload for volatile float3
-inline
-__device__
-void operator+=(volatile float3 &a, volatile float3 b) {
-    a.x += b.x;
-    a.y += b.y;
-    a.z += b.z;
-}
+#define MAX_LENGTH 10000
+#define MIN_LENGTH 0
 
 // Helper function for reduce centroid calculations, adjusted from Mark Harris' code at:
 // http://developer.download.nvidia.com/assets/cuda/files/reduction.pdf
@@ -57,11 +20,6 @@ void warpReduceCentroid(volatile uint32_t *sharedClusterSize,     // output: sha
                         volatile float3 *sharedCentroid,          // output: shared coordinates sum for centroid
                         uint32_t tid) {                           // input: thread ID
     if (blockSize >= 64) {
-//        printf("Thread %d adding cluster size[tid]: %d and cluster size[tid + 32]: %d,"
-//               "centroid: %f %f %f and %f %f %f\n",
-//                tid, sharedClusterSize[tid], sharedClusterSize[tid + 32],
-//                sharedCentroid[tid].x, sharedCentroid[tid].y, sharedCentroid[tid].z,
-//               sharedCentroid[tid + 32].x, sharedCentroid[tid + 32].y, sharedCentroid[tid + 32].z);
         sharedClusterSize[tid] += sharedClusterSize[tid + 32];
         sharedCentroid[tid] += sharedCentroid[tid + 32];
     }
@@ -114,19 +72,11 @@ void calcClusterCentroidD(Cluster *cluster,                    // output: curren
         if(clusterInds[i] == currentClusterInd) {
             sharedClusterSize[tid] += 1;
             sharedCentroid[tid] += oldPos[i];
-//            printf("Thread: %d block: %d"
-//                   " adding 1 from i: %d to cluster size[tid]: %d, centroid: %f %f %f\n",
-//                    tid, blockIdx.x, i, sharedClusterSize[tid],
-//                    sharedCentroid[tid].x, sharedCentroid[tid].y, sharedCentroid[tid].z);
         }
         if (nIsPow2 || i + blockSize < params.numParticles) {
             if(clusterInds[i + blockSize] == currentClusterInd) {
                 sharedClusterSize[tid] += 1;
                 sharedCentroid[tid] += oldPos[i + blockSize];
-//                printf("Thread: %d block: %d"
-//                       " adding 1 from i + blockSize: %d to cluster size[tid]: %d, centroid: %f %f %f\n",
-//                        tid, blockIdx.x, i + blockSize, sharedClusterSize[tid],
-//                       sharedCentroid[tid].x, sharedCentroid[tid].y, sharedCentroid[tid].z);
             }
         }
         i += gridSize;
@@ -165,7 +115,6 @@ void calcClusterCentroidD(Cluster *cluster,                    // output: curren
         warpReduceCentroid<blockSize>(sharedClusterSize, sharedCentroid, tid);
     }
     if (tid == 0) {
-        //printf("Thread: %d block: %d block cluster size: %d\n", tid, blockIdx.x, sharedClusterSize[0]);
         atomicAdd(&(cluster->clusterSize), sharedClusterSize[0]);
         atomicAdd(&(cluster->centroid.x), sharedCentroid[0].x);
         atomicAdd(&(cluster->centroid.y), sharedCentroid[0].y);
@@ -221,10 +170,8 @@ void warpReduceEdgeLengths(volatile float *sharedMinEdge,            // output: 
 template <uint32_t blockSize, bool nIsPow2>
 __global__
 void calcClusterEdgeLengthsD(Cluster *cluster,                    // output: current cluster
-                             float *edgesLengths,                 // input: edges lengths
-                             uint32_t edgesCount,                 // input: number of edges
-                             int32_t *clusterInds,                // input: cluster index for each vertex
-                             uint32_t currentClusterInd) {        // input: index of current cluster
+                             float *edgesLengths,                 // input: edges lengths, -1 if outside the cluster
+                             uint32_t edgesCount) {               // input: number of edges)
     extern __shared__ float sharedEdgeArray[];
 
     uint32_t sharedMemoryMul = (blockDim.x <= 32) ? 2 * blockDim.x : blockDim.x;
@@ -235,26 +182,23 @@ void calcClusterEdgeLengthsD(Cluster *cluster,                    // output: cur
     uint32_t i = blockIdx.x * (blockSize * 2) + tid;
     uint32_t gridSize = blockSize * 2 * gridDim.x;
 
-    sharedMinEdge[tid] = MAX_POS;
-    sharedMaxEdge[tid] = MIN_POS;
+    sharedMinEdge[tid] = MAX_LENGTH;
+    sharedMaxEdge[tid] = MIN_LENGTH;
 
     while (i < edgesCount) {
-        if(clusterInds[i] == currentClusterInd) {
-            if (edgesLengths[i] < sharedMinEdge[tid]) {
-                sharedMinEdge[tid] = edgesLengths[i];
-            }
-            if (edgesLengths[i] > sharedMaxEdge[tid]) {
-                sharedMaxEdge[tid] = edgesLengths[i];
-            }
+        if (edgesLengths[i] >= 0.0f && edgesLengths[i] < sharedMinEdge[tid]) {
+            sharedMinEdge[tid] = edgesLengths[i];
+        }
+        if (edgesLengths[i] > sharedMaxEdge[tid]) {
+            sharedMaxEdge[tid] = edgesLengths[i];
         }
         if (nIsPow2 || i + blockSize < edgesCount) {
-            if(clusterInds[i + blockSize] == currentClusterInd) {
-                if (edgesLengths[i + blockSize] < sharedMinEdge[tid]) {
-                    sharedMinEdge[tid] = edgesLengths[i + blockSize];
-                }
-                if (edgesLengths[i + blockSize] > sharedMaxEdge[tid]) {
-                    sharedMaxEdge[tid] = edgesLengths[i + blockSize];
-                }
+            if (edgesLengths[i + blockSize] >= 0.0f
+                && edgesLengths[i + blockSize] < sharedMinEdge[tid]) {
+                sharedMinEdge[tid] = edgesLengths[i + blockSize];
+            }
+            if (edgesLengths[i + blockSize] > sharedMaxEdge[tid]) {
+                sharedMaxEdge[tid] = edgesLengths[i + blockSize];
             }
         }
         i += gridSize;
@@ -357,8 +301,8 @@ void calcClusterPathLengthsD(Cluster *cluster,                    // output: cur
     uint32_t i = blockIdx.x * (blockSize * 2) + tid;
     uint32_t gridSize = blockSize * 2 * gridDim.x;
 
-    sharedMaxPath[tid] = MIN_POS;
-    sharedMaxPathVertices[tid] = 0;
+    sharedMaxPath[tid] = MIN_LENGTH;
+    sharedMaxPathVertices[tid] = MIN_LENGTH;
 
     while (i < params.numParticles) {
         if(clusterInds[i] == currentClusterInd) {
